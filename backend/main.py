@@ -14,8 +14,16 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import logging
+import os
+from pathlib import Path
+import sys
 from contextlib import asynccontextmanager
 from typing import Any, Optional
+
+# Ensure backend directory and its subdirectories are on sys.path
+_backend_dir = str(Path(__file__).resolve().parent)
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
 
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware

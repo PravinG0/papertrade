@@ -9,6 +9,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.3
+      - key: PYTHONPATH
+        value: backend:.
       - key: PORT
         value: 10000
       - key: ENABLE_KEEP_ALIVE
