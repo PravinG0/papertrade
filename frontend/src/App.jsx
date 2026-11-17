@@ -214,7 +214,8 @@ export default function App() {
     function connectWs() {
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsHost = window.location.hostname || 'localhost';
-      const wsUrl = `${wsProtocol}//${wsHost}:8000/ws/terminal`;
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+      const wsUrl = `${wsProtocol}//${wsHost}:8000/ws/terminal${tokenParam}`;
 
       try {
         ws = new WebSocket(wsUrl);
@@ -233,8 +234,11 @@ export default function App() {
               if (Array.isArray(data.trading_state?.orders)) setOrders(data.trading_state.orders);
               if (data.replay_state) setReplayState(data.replay_state);
             } else if (data.type === 'TICK') {
-              if (data.portfolio) setPortfolio(data.portfolio);
-              if (Array.isArray(data.positions)) setPositions(data.positions);
+              // Only overwrite portfolio and positions if user is NOT logged in
+              if (!token) {
+                if (data.portfolio) setPortfolio(data.portfolio);
+                if (Array.isArray(data.positions)) setPositions(data.positions);
+              }
               if (Array.isArray(data.indices)) {
                 const map = {};
                 data.indices.forEach((item) => {
@@ -254,9 +258,15 @@ export default function App() {
                 }
               }
             } else if (data.type === 'ORDER_UPDATE') {
-              if (data.trading_state?.portfolio) setPortfolio(data.trading_state.portfolio);
-              if (Array.isArray(data.trading_state?.positions)) setPositions(data.trading_state.positions);
-              if (Array.isArray(data.trading_state?.orders)) setOrders(data.trading_state.orders);
+              const matchesUser =
+                data.user_id === undefined ||
+                (user && user.id === data.user_id) ||
+                (!user && !data.user_id);
+              if (matchesUser) {
+                if (data.trading_state?.portfolio) setPortfolio(data.trading_state.portfolio);
+                if (Array.isArray(data.trading_state?.positions)) setPositions(data.trading_state.positions);
+                if (Array.isArray(data.trading_state?.orders)) setOrders(data.trading_state.orders);
+              }
             }
           } catch (e) {
             // Ignore parse errors
@@ -298,7 +308,7 @@ export default function App() {
       if (ws) ws.close();
       clearInterval(interval);
     };
-  }, [selectedIndex, syncMarketIndices, syncTradingState, syncReplayState]);
+  }, [selectedIndex, token, user, syncMarketIndices, syncTradingState, syncReplayState]);
 
   // Order Placement Handler
   const handlePlaceOrder = async (orderPayload) => {
