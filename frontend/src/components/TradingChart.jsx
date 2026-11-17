@@ -323,11 +323,16 @@ function ChartPane({
   }, []);
 
   useEffect(() => {
-    if (ema20SeriesRef.current && ema50SeriesRef.current) {
-      ema20SeriesRef.current.applyOptions({ visible: showEma });
-      ema50SeriesRef.current.applyOptions({ visible: showEma });
+    if (ema20SeriesRef.current) {
+      ema20SeriesRef.current.applyOptions({ visible: showEma20 });
     }
-  }, [showEma]);
+  }, [showEma20]);
+
+  useEffect(() => {
+    if (ema50SeriesRef.current) {
+      ema50SeriesRef.current.applyOptions({ visible: showEma50 });
+    }
+  }, [showEma50]);
 
   useEffect(() => {
     loadCandleData();
