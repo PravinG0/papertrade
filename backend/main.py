@@ -496,15 +496,15 @@ async def control_historical_replay(req: ReplayControlRequest):
     action = req.action.lower()
     if action == "pause":
         return await replay_engine.pause()
-    elif action == "resume":
+    elif action in ("resume", "play", "start"):
         return await replay_engine.resume()
     elif action == "speed":
         if req.speed is None:
             raise HTTPException(status_code=400, detail="Speed parameter is required for speed control.")
         return await replay_engine.set_speed(req.speed)
-    elif action == "step_forward":
+    elif action in ("step_forward", "step", "next"):
         return await replay_engine.step_forward()
-    elif action == "step_backward":
+    elif action in ("step_backward", "prev", "back"):
         return await replay_engine.step_backward()
     elif action == "stop":
         return await replay_engine.stop_replay()
