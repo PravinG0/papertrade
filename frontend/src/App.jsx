@@ -176,8 +176,83 @@ export default function App() {
     }
   }, []);
 
-  // Global polling effect
+  // Global WebSocket Live Streaming Feed with REST Polling Fallback
   useEffect(() => {
+    let ws = null;
+    let reconnectTimer = null;
+    let isMounted = true;
+
+    function connectWs() {
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsHost = window.location.hostname || 'localhost';
+      const wsUrl = `${wsProtocol}//${wsHost}:8000/ws/terminal`;
+
+      try {
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          // Connected to streaming feed
+        };
+
+        ws.onmessage = (event) => {
+          if (!isMounted) return;
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'INIT') {
+              if (data.trading_state?.portfolio) setPortfolio(data.trading_state.portfolio);
+              if (Array.isArray(data.trading_state?.positions)) setPositions(data.trading_state.positions);
+              if (Array.isArray(data.trading_state?.orders)) setOrders(data.trading_state.orders);
+              if (data.replay_state) setReplayState(data.replay_state);
+            } else if (data.type === 'TICK') {
+              if (data.portfolio) setPortfolio(data.portfolio);
+              if (Array.isArray(data.positions)) setPositions(data.positions);
+              if (Array.isArray(data.indices)) {
+                const map = {};
+                data.indices.forEach((item) => {
+                  if (item && item.symbol) {
+                    map[item.symbol] = {
+                      ltp: item.ltp,
+                      change: item.net_change ?? item.change ?? 0,
+                      change_pct: item.percent_change ?? item.change_pct ?? 0,
+                    };
+                  }
+                });
+                if (Object.keys(map).length > 0) {
+                  setIndices((prev) => ({ ...prev, ...map }));
+                  if (map[selectedIndex]?.ltp) {
+                    setSpotPrice(map[selectedIndex].ltp);
+                  }
+                }
+              }
+            } else if (data.type === 'ORDER_UPDATE') {
+              if (data.trading_state?.portfolio) setPortfolio(data.trading_state.portfolio);
+              if (Array.isArray(data.trading_state?.positions)) setPositions(data.trading_state.positions);
+              if (Array.isArray(data.trading_state?.orders)) setOrders(data.trading_state.orders);
+            }
+          } catch (e) {
+            // Ignore parse errors
+          }
+        };
+
+        ws.onclose = () => {
+          if (isMounted) {
+            reconnectTimer = setTimeout(connectWs, 3000);
+          }
+        };
+
+        ws.onerror = () => {
+          ws?.close();
+        };
+      } catch (err) {
+        if (isMounted) {
+          reconnectTimer = setTimeout(connectWs, 5000);
+        }
+      }
+    }
+
+    connectWs();
+
+    // Fallback polling interval (keeps state resilient even if WS drops)
     syncMarketIndices();
     syncTradingState();
     syncReplayState();
@@ -186,10 +261,15 @@ export default function App() {
       syncMarketIndices();
       syncTradingState();
       syncReplayState();
-    }, 2000);
+    }, 3000);
 
-    return () => clearInterval(interval);
-  }, [syncMarketIndices, syncTradingState, syncReplayState]);
+    return () => {
+      isMounted = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) ws.close();
+      clearInterval(interval);
+    };
+  }, [selectedIndex, syncMarketIndices, syncTradingState, syncReplayState]);
 
   // Order Placement Handler
   const handlePlaceOrder = async (orderPayload) => {

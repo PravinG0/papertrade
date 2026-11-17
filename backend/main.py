@@ -16,7 +16,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -37,19 +37,47 @@ logging.basicConfig(level=logging.INFO)
 _mtm_task: Optional[asyncio.Task] = None
 
 
+class ConnectionManager:
+    """Manages real-time WebSocket connections for live terminal tick broadcasting."""
+
+    def __init__(self) -> None:
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.info("WebSocket terminal client connected. Total clients: %d", len(self.active_connections))
+
+    def disconnect(self, websocket: WebSocket) -> None:
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+            logger.info("WebSocket terminal client disconnected. Remaining: %d", len(self.active_connections))
+
+    async def broadcast(self, message: dict[str, Any]) -> None:
+        for connection in list(self.active_connections):
+            try:
+                await connection.send_json(message)
+            except Exception:
+                self.disconnect(connection)
+
+
+ws_manager = ConnectionManager()
+
+
 async def _periodic_mtm_loop() -> None:
     """Periodically update paper positions MTM and verify auto-squareoff."""
     while True:
         try:
-            await asyncio.sleep(2.5)
+            await asyncio.sleep(2.0)
             # Check 15:15 IST MIS Auto Square-off
             await paper_engine.check_intraday_squareoff()
+
+            # Always fetch latest spots for WebSocket streaming and MTM
+            spots = await angel_service.get_spot_indices()
 
             # Only update live prices if replay mode is not active and positions exist
             state = await paper_engine.get_state()
             if not replay_engine.is_replaying and state["positions"]:
-                # Fetch fresh spot indices
-                spots = await angel_service.get_spot_indices()
                 quotes_dict: dict[str, float] = {}
 
                 for s in spots:
@@ -71,6 +99,17 @@ async def _periodic_mtm_loop() -> None:
                         quotes_dict[f"{sym}{k}PE"] = pe_p
 
                 await paper_engine.update_market_prices(quotes_dict)
+
+            # Broadcast real-time TICK to all connected WebSockets
+            if ws_manager.active_connections:
+                fresh_state = await paper_engine.get_state()
+                await ws_manager.broadcast({
+                    "type": "TICK",
+                    "indices": spots,
+                    "portfolio": fresh_state.get("portfolio"),
+                    "positions": fresh_state.get("positions"),
+                    "timestamp": fresh_state.get("timestamp"),
+                })
         except asyncio.CancelledError:
             break
         except Exception as exc:
@@ -182,6 +221,32 @@ class SchedulerStartRequest(BaseModel):
     interval_minutes: int = Field(default=5, description="Interval in minutes: 3, 5, 10, or 15")
     symbol: str = Field(default="NIFTY", description="Underlying index: NIFTY or BANKNIFTY")
     auto_execute: bool = Field(default=False, description="Auto-execute Judge trades if confidence >= 70%")
+
+
+# ── Real-Time WebSocket Terminal Feed ────────────────────────────────────────
+@app.websocket("/ws/terminal")
+async def websocket_terminal_endpoint(websocket: WebSocket):
+    """Real-time streaming tick feed for options chain, MTM, and order updates."""
+    await ws_manager.connect(websocket)
+    try:
+        spots = await angel_service.get_spot_indices()
+        state = await paper_engine.get_state()
+        replay = replay_engine.get_state()
+        await websocket.send_json({
+            "type": "INIT",
+            "indices": spots,
+            "trading_state": state,
+            "replay_state": replay,
+        })
+        while True:
+            msg = await websocket.receive_text()
+            if msg == "ping":
+                await websocket.send_text("pong")
+    except (WebSocketDisconnect, asyncio.CancelledError):
+        ws_manager.disconnect(websocket)
+    except Exception as exc:
+        logger.debug("WebSocket exception: %s", exc)
+        ws_manager.disconnect(websocket)
 
 
 # ── System & Status Endpoints ────────────────────────────────────────────────
@@ -331,6 +396,11 @@ async def place_paper_order(order: OrderCreateRequest, current_user: Optional[Us
     result = await paper_engine.place_order(order_data, user_id=user_id)
     if result.get("status") == "REJECTED":
         raise HTTPException(status_code=400, detail=result.get("reject_reason", "Order rejected."))
+    if ws_manager.active_connections:
+        asyncio.create_task(ws_manager.broadcast({
+            "type": "ORDER_UPDATE",
+            "trading_state": await paper_engine.get_state(user_id=user_id),
+        }))
     return result
 
 
@@ -368,6 +438,11 @@ async def exit_paper_position(
     result = await paper_engine.exit_position(pos_id, exit_price=exit_price, user_id=user_id)
     if result.get("status") == "ERROR":
         raise HTTPException(status_code=404, detail=result.get("message"))
+    if ws_manager.active_connections:
+        asyncio.create_task(ws_manager.broadcast({
+            "type": "ORDER_UPDATE",
+            "trading_state": await paper_engine.get_state(user_id=user_id),
+        }))
     return result
 
 
@@ -388,6 +463,11 @@ async def exit_all_paper_positions(current_user: Optional[UserModel] = Depends(g
     """Exit / square off all active paper positions at current market price."""
     user_id = current_user.id if current_user else None
     results = await paper_engine.exit_all_positions(user_id=user_id)
+    if ws_manager.active_connections:
+        asyncio.create_task(ws_manager.broadcast({
+            "type": "ORDER_UPDATE",
+            "trading_state": await paper_engine.get_state(user_id=user_id),
+        }))
     return {"status": "SUCCESS", "message": f"Closed {len(results)} positions.", "results": results}
 
 
@@ -411,10 +491,16 @@ async def update_position_stop_loss(
 async def reset_paper_wallet(current_user: Optional[UserModel] = Depends(get_optional_user)):
     """Reset virtual trading wallet back to default ₹10,00,000 INR."""
     user_id = current_user.id if current_user else None
-    return await paper_engine.reset_portfolio(
+    res = await paper_engine.reset_portfolio(
         initial_capital=getattr(settings, "VIRTUAL_STARTING_CAPITAL", 1000000.0),
         user_id=user_id,
     )
+    if ws_manager.active_connections:
+        asyncio.create_task(ws_manager.broadcast({
+            "type": "ORDER_UPDATE",
+            "trading_state": await paper_engine.get_state(user_id=user_id),
+        }))
+    return res
 
 
 @app.get("/api/trading/history")
