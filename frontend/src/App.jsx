@@ -13,6 +13,7 @@ import PositionSizeModal from './components/PositionSizeModal';
 import ShortcutsModal from './components/ShortcutsModal';
 import AuthModal from './components/AuthModal';
 import DebateArena from './components/DebateArena';
+import QuickScalperBar from './components/QuickScalperBar';
 import { useAuth } from './context/AuthContext';
 import sound from './utils/audio';
 import {
@@ -475,7 +476,7 @@ export default function App() {
             {/* Right 5 Columns: Split Top = Chart, Bottom = Positions / Orders */}
             <div className="lg:col-span-5 flex flex-col gap-3 h-full overflow-hidden">
               {/* Top Half: Responsive Candlestick Chart */}
-              <div className="h-[48%] min-h-[280px]">
+              <div className="h-[44%] min-h-[260px]">
                 <TradingChart
                   selectedIndex={selectedIndex}
                   contract={selectedContract}
@@ -488,8 +489,15 @@ export default function App() {
                 />
               </div>
 
+              {/* Middle: 1-Click Scalper Dock */}
+              <QuickScalperBar
+                selectedIndex={selectedIndex}
+                spotPrice={spotPrice}
+                onPlaceOrder={handlePlaceOrder}
+              />
+
               {/* Bottom Half: Tabs for Positions & Orders */}
-              <div className="h-[52%] flex flex-col min-h-[300px] overflow-hidden">
+              <div className="flex-1 flex flex-col min-h-[260px] overflow-hidden">
                 {/* Panel Switcher Tab Header */}
                 <div className="flex items-center gap-1 mb-1.5 bg-slate-900/60 p-1 rounded-lg border border-slate-800 text-xs w-fit">
                   <button
