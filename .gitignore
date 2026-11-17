@@ -2,5 +2,11 @@ node_modules/
 __pycache__/
 *.pyc
 dist/
+frontend/dist/
 .env.local
 .DS_Store
+*.db
+*.sqlite
+*.sqlite3
+*.png
+backend/debate_sessions.json
