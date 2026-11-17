@@ -38,6 +38,26 @@ function calculateEMA(candles, period) {
   return ema;
 }
 
+function calculateVWAP(candles) {
+  if (!candles || candles.length === 0) return [];
+  let cumVol = 0;
+  let cumVolPrice = 0;
+  const vwap = [];
+
+  for (let i = 0; i < candles.length; i++) {
+    const c = candles[i];
+    const typicalPrice = ((c.high || c.close) + (c.low || c.close) + c.close) / 3;
+    const vol = Math.max(1, Number(c.volume || 1));
+    cumVolPrice += typicalPrice * vol;
+    cumVol += vol;
+    vwap.push({
+      time: c.time,
+      value: Number((cumVolPrice / cumVol).toFixed(2)),
+    });
+  }
+  return vwap;
+}
+
 function generateMockCandles(symbol, interval, isOption = false, base = null) {
   const isBank = symbol === 'BANKNIFTY';
   let basePrice =
@@ -85,7 +105,9 @@ function ChartPane({
   const [selectedTf, setSelectedTf] = useState(TIMEFRAMES[initialTfIndex]);
   const [loading, setLoading] = useState(true);
   const [legendData, setLegendData] = useState(null);
-  const [showEma, setShowEma] = useState(true);
+  const [showEma20, setShowEma20] = useState(true);
+  const [showEma50, setShowEma50] = useState(true);
+  const [showVwap, setShowVwap] = useState(true);
 
   const containerRef = useRef(null);
   const chartRef = useRef(null);
@@ -93,6 +115,7 @@ function ChartPane({
   const volumeSeriesRef = useRef(null);
   const ema20SeriesRef = useRef(null);
   const ema50SeriesRef = useRef(null);
+  const vwapSeriesRef = useRef(null);
 
   const loadCandleData = useCallback(async (isSilent = false) => {
     if (!isSilent) setLoading(true);
@@ -138,9 +161,11 @@ function ChartPane({
 
         const ema20 = calculateEMA(cleanCandles, 20);
         const ema50 = calculateEMA(cleanCandles, 50);
+        const vwap = calculateVWAP(cleanCandles);
 
         if (ema20SeriesRef.current) ema20SeriesRef.current.setData(ema20);
         if (ema50SeriesRef.current) ema50SeriesRef.current.setData(ema50);
+        if (vwapSeriesRef.current) vwapSeriesRef.current.setData(vwap);
 
         const latest = cleanCandles[cleanCandles.length - 1];
         const prev = cleanCandles.length > 1 ? cleanCandles[cleanCandles.length - 2] : latest;
@@ -244,11 +269,19 @@ function ChartPane({
       title: 'EMA 50',
     });
 
+    const vwapSeries = chart.addSeries(LineSeries, {
+      color: '#c084fc',
+      lineWidth: 1.5,
+      priceLineVisible: false,
+      title: 'VWAP',
+    });
+
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
     ema20SeriesRef.current = ema20Series;
     ema50SeriesRef.current = ema50Series;
+    vwapSeriesRef.current = vwapSeries;
 
     chart.subscribeCrosshairMove((param) => {
       if (param.time && candleSeriesRef.current) {
@@ -335,19 +368,55 @@ function ChartPane({
           </div>
         </div>
 
-        <div className="flex items-center gap-1">
-          {/* EMA Toggle */}
-          <button
-            onClick={() => setShowEma(!showEma)}
-            className={`p-1 rounded border text-[10px] transition-colors ${
-              showEma
-                ? 'bg-slate-800 border-slate-700 text-cyan-400'
-                : 'bg-slate-900 border-slate-800 text-slate-500'
-            }`}
-            title="Toggle EMA 20/50"
-          >
-            {showEma ? <Eye size={11} /> : <EyeOff size={11} />}
-          </button>
+        <div className="flex items-center gap-1.5">
+          {/* Indicator Quick Toggles */}
+          <div className="flex items-center gap-1 font-mono text-[10px]">
+            <button
+              onClick={() => {
+                const next = !showEma20;
+                setShowEma20(next);
+                ema20SeriesRef.current?.applyOptions({ visible: next });
+              }}
+              className={`px-1.5 py-0.5 rounded transition-all font-bold ${
+                showEma20
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                  : 'bg-slate-900 text-slate-500 border border-slate-800'
+              }`}
+              title="Toggle EMA 20 (Orange)"
+            >
+              EMA20
+            </button>
+            <button
+              onClick={() => {
+                const next = !showEma50;
+                setShowEma50(next);
+                ema50SeriesRef.current?.applyOptions({ visible: next });
+              }}
+              className={`px-1.5 py-0.5 rounded transition-all font-bold ${
+                showEma50
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                  : 'bg-slate-900 text-slate-500 border border-slate-800'
+              }`}
+              title="Toggle EMA 50 (Cyan)"
+            >
+              EMA50
+            </button>
+            <button
+              onClick={() => {
+                const next = !showVwap;
+                setShowVwap(next);
+                vwapSeriesRef.current?.applyOptions({ visible: next });
+              }}
+              className={`px-1.5 py-0.5 rounded transition-all font-bold ${
+                showVwap
+                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                  : 'bg-slate-900 text-slate-500 border border-slate-800'
+              }`}
+              title="Toggle VWAP (Purple)"
+            >
+              VWAP
+            </button>
+          </div>
 
           {/* Refresh */}
           <button
