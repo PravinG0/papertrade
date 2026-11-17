@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Header from './components/Header';
 import OptionChain from './components/OptionChain';
 import TradingChart from './components/TradingChart';
@@ -27,6 +27,7 @@ import {
   updateStopLoss,
   resetPortfolio,
   getReplayState,
+  getTradeHistory,
 } from './api';
 import { Activity, Clock } from 'lucide-react';
 
@@ -91,6 +92,33 @@ export default function App() {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3500);
   };
+
+  // Sound and Toast detection on automated SL, Target or Square-Off triggers
+  const prevPositionsCountRef = useRef(0);
+  useEffect(() => {
+    if (prevPositionsCountRef.current > positions.length) {
+      getTradeHistory()
+        .then((res) => {
+          const trades = res.data?.trades || res.data || [];
+          if (trades.length > 0) {
+            const latest = trades[0];
+            const reason = latest.exit_reason || latest.reason;
+            if (reason === 'TARGET_HIT') {
+              sound.playTargetHit();
+              showToast(`🎉 Target Achieved on ${latest.symbol}! Net P&L: +₹${latest.realized_pnl}`, 'success');
+            } else if (reason === 'STOP_LOSS_HIT') {
+              sound.playStopLoss();
+              showToast(`⚠️ Stop Loss Hit on ${latest.symbol}: ₹${latest.realized_pnl}`, 'error');
+            } else if (reason === 'AUTO_SQUAREOFF_315PM') {
+              sound.playCancel();
+              showToast(`⏰ 3:15 PM Auto Square-off: ${latest.symbol} closed`, 'info');
+            }
+          }
+        })
+        .catch(() => {});
+    }
+    prevPositionsCountRef.current = positions.length;
+  }, [positions.length]);
 
   // Sync market indices
   const syncMarketIndices = useCallback(async () => {
