@@ -6,6 +6,10 @@ const getBaseUrl = () => {
     const clean = envUrl.trim().replace(/\/$/, '');
     return clean.endsWith('/api') ? clean : `${clean}/api`;
   }
+  // Default to Render production backend if running on Vercel
+  if (typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')) {
+    return 'https://papertrade-s9fq.onrender.com/api';
+  }
   return '/api';
 };
 

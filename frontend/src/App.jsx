@@ -221,6 +221,8 @@ export default function App() {
       } else if (import.meta.env.VITE_API_URL) {
         const wsBase = import.meta.env.VITE_API_URL.replace(/^http/, 'ws').replace(/\/$/, '');
         wsUrl = `${wsBase}/ws/terminal${tokenParam}`;
+      } else if (typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')) {
+        wsUrl = `wss://papertrade-s9fq.onrender.com/ws/terminal${tokenParam}`;
       } else {
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsHost = window.location.hostname || 'localhost';
