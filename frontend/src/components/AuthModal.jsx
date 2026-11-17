@@ -30,6 +30,69 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  const handleGoogleCredentialResponse = async (response) => {
+    if (!response?.credential) {
+      setError('Google Sign-In failed: No credential token received.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await auth.googleLogin(response.credential);
+      await login(res.data);
+      onAuthSuccess('Signed in with Google successfully!');
+      onClose();
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message || 'Google authentication failed.';
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let timer = null;
+    const setupGoogleBtn = () => {
+      const element = document.getElementById('googleSignInButton');
+      if (!element) return false;
+
+      if (window.google?.accounts?.id) {
+        try {
+          window.google.accounts.id.initialize({
+            client_id: GOOGLE_CLIENT_ID,
+            callback: handleGoogleCredentialResponse,
+          });
+          element.innerHTML = '';
+          window.google.accounts.id.renderButton(element, {
+            theme: 'filled_black',
+            size: 'large',
+            width: 320,
+            text: 'continue_with',
+          });
+          return true;
+        } catch (err) {
+          console.error('Failed to initialize Google Sign-In:', err);
+        }
+      }
+      return false;
+    };
+
+    if (!setupGoogleBtn()) {
+      const startTime = Date.now();
+      timer = setInterval(() => {
+        if (setupGoogleBtn() || Date.now() - startTime > 4000) {
+          clearInterval(timer);
+        }
+      }, 150);
+    }
+
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [isOpen, tab]);
+
   if (!isOpen) return null;
 
   const handleLoginSubmit = async (e) => {
@@ -160,6 +223,19 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
               <span>{error}</span>
             </div>
           )}
+
+          {/* Google Sign-In */}
+          <div className="mb-4 flex flex-col items-center">
+            <div id="googleSignInButton" className="w-full flex justify-center"></div>
+          </div>
+
+          {/* Beautiful OR Divider */}
+          <div className="relative flex items-center justify-center my-4">
+            <div className="border-t border-slate-800 w-full" />
+            <span className="bg-[#0b0f19] px-3 text-[11px] font-semibold text-slate-500 uppercase tracking-wider absolute">
+              OR
+            </span>
+          </div>
 
           {tab === 'login' ? (
             <form onSubmit={handleLoginSubmit} className="space-y-4">

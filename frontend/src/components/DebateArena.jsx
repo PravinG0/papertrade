@@ -182,6 +182,17 @@ export default function DebateArena({
   const [executing, setExecuting] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
 
+  // Auto-Debate Scheduler State
+  const [schedulerRunning, setSchedulerRunning] = useState(false);
+  const [schedulerInterval, setSchedulerInterval] = useState(5);
+  const [autoExecute, setAutoExecute] = useState(false);
+  const [nextRunTime, setNextRunTime] = useState(null);
+  const [runCount, setRunCount] = useState(0);
+  const [countdownText, setCountdownText] = useState('');
+  const [schedulerLoading, setSchedulerLoading] = useState(false);
+
+  const prevRunCountRef = useRef(0);
+
   // Sync internal symbol if parent prop changes
   useEffect(() => {
     if (selectedIndex && selectedIndex !== currentSymbol) {
@@ -220,6 +231,153 @@ export default function DebateArena({
     fetchLatest(currentSymbol);
     fetchHistoryList();
   }, [currentSymbol, fetchLatest, fetchHistoryList]);
+
+  // Sync scheduler status from backend
+  const checkSchedulerStatus = useCallback(async () => {
+    try {
+      const res = await getSchedulerStatus();
+      if (res.data) {
+        const s = res.data;
+        const isRun = Boolean(s.is_running);
+        setSchedulerRunning(isRun);
+        if (s.interval_minutes) setSchedulerInterval(s.interval_minutes);
+        if (s.auto_execute !== undefined) setAutoExecute(Boolean(s.auto_execute));
+        setNextRunTime(s.next_run || null);
+        setRunCount(s.run_count || 0);
+
+        // Auto-refresh debate stream and transcripts whenever a scheduled debate completes
+        if (s.run_count > prevRunCountRef.current && prevRunCountRef.current > 0) {
+          fetchLatest(currentSymbol);
+          fetchHistoryList();
+        }
+        prevRunCountRef.current = s.run_count || 0;
+        return s;
+      }
+    } catch (err) {
+      console.warn('Could not fetch scheduler status:', err);
+    }
+    return null;
+  }, [currentSymbol, fetchLatest, fetchHistoryList]);
+
+  // Initial scheduler query on mount
+  useEffect(() => {
+    checkSchedulerStatus();
+  }, [checkSchedulerStatus]);
+
+  // Periodic polling for scheduler heartbeat when active
+  useEffect(() => {
+    if (!schedulerRunning) return;
+    const pollInterval = setInterval(() => {
+      checkSchedulerStatus();
+    }, 3500);
+    return () => clearInterval(pollInterval);
+  }, [schedulerRunning, checkSchedulerStatus]);
+
+  // 1-second Countdown Ticker
+  useEffect(() => {
+    if (!schedulerRunning || !nextRunTime) {
+      setCountdownText('--:--');
+      return;
+    }
+
+    const updateTicker = () => {
+      const targetMs = new Date(nextRunTime).getTime();
+      const nowMs = Date.now();
+      const diffSec = Math.max(0, Math.floor((targetMs - nowMs) / 1000));
+
+      if (diffSec <= 0) {
+        setCountdownText('Running...');
+        return;
+      }
+
+      const mins = Math.floor(diffSec / 60);
+      const secs = diffSec % 60;
+      setCountdownText(`${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`);
+    };
+
+    updateTicker();
+    const ticker = setInterval(updateTicker, 1000);
+    return () => clearInterval(ticker);
+  }, [schedulerRunning, nextRunTime]);
+
+  // Toggle Auto-Debate ON/OFF
+  const handleToggleScheduler = async () => {
+    setSchedulerLoading(true);
+    setErrorMsg(null);
+    try {
+      if (schedulerRunning) {
+        const res = await stopScheduler();
+        if (res.data?.scheduler) {
+          setSchedulerRunning(false);
+          setNextRunTime(null);
+        }
+      } else {
+        const res = await startScheduler({
+          interval_minutes: Number(schedulerInterval),
+          symbol: currentSymbol,
+          auto_execute: Boolean(autoExecute),
+        });
+        if (res.data?.scheduler) {
+          const s = res.data.scheduler;
+          setSchedulerRunning(true);
+          setNextRunTime(s.next_run);
+          setRunCount(s.run_count || 0);
+          prevRunCountRef.current = s.run_count || 0;
+        }
+      }
+    } catch (err) {
+      const msg = err?.response?.data?.detail || err.message || 'Failed to toggle scheduler';
+      setErrorMsg(msg);
+    } finally {
+      setSchedulerLoading(false);
+    }
+  };
+
+  // Change interval
+  const handleIntervalChange = async (newVal) => {
+    const val = Number(newVal);
+    setSchedulerInterval(val);
+    if (schedulerRunning) {
+      setSchedulerLoading(true);
+      try {
+        const res = await startScheduler({
+          interval_minutes: val,
+          symbol: currentSymbol,
+          auto_execute: Boolean(autoExecute),
+        });
+        if (res.data?.scheduler) {
+          setNextRunTime(res.data.scheduler.next_run);
+        }
+      } catch (err) {
+        console.warn('Failed to update scheduler interval:', err);
+      } finally {
+        setSchedulerLoading(false);
+      }
+    }
+  };
+
+  // Toggle auto execution of trades
+  const handleAutoExecuteToggle = async () => {
+    const nextVal = !autoExecute;
+    setAutoExecute(nextVal);
+    if (schedulerRunning) {
+      setSchedulerLoading(true);
+      try {
+        const res = await startScheduler({
+          interval_minutes: Number(schedulerInterval),
+          symbol: currentSymbol,
+          auto_execute: nextVal,
+        });
+        if (res.data?.scheduler) {
+          setNextRunTime(res.data.scheduler.next_run);
+        }
+      } catch (err) {
+        console.warn('Failed to update scheduler auto-execute mode:', err);
+      } finally {
+        setSchedulerLoading(false);
+      }
+    }
+  };
 
   // Trigger Live AI Debate
   const handleTriggerDebate = async () => {
@@ -326,6 +484,104 @@ export default function DebateArena({
 
   return (
     <div className="space-y-4 max-w-7xl mx-auto pb-12">
+      {/* ── AUTO-DEBATE SCHEDULER CONTROL BAR ── */}
+      <div className="bg-[#0D131F]/90 backdrop-blur-md border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-xl">
+        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 sm:gap-4">
+          {/* Left: Auto-Debate Toggle, Active Badge & Interval Selector */}
+          <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
+            <button
+              onClick={handleToggleScheduler}
+              disabled={schedulerLoading}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs transition-all duration-200 shadow-md ${
+                schedulerRunning
+                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-950/50 ring-1 ring-emerald-400/40'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700/80'
+              }`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  schedulerRunning ? 'bg-emerald-300 animate-pulse' : 'bg-slate-500'
+                }`}
+              />
+              <span>
+                {schedulerLoading
+                  ? 'Updating...'
+                  : schedulerRunning
+                  ? 'Auto-Debate: ON'
+                  : 'Auto-Debate: OFF'}
+              </span>
+            </button>
+
+            {/* Active / Standby Status Badge */}
+            <div
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${
+                schedulerRunning
+                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                  : 'bg-slate-900 text-slate-500 border border-slate-800'
+              }`}
+            >
+              <Activity size={13} className={schedulerRunning ? 'animate-pulse' : ''} />
+              <span>{schedulerRunning ? 'Active Schedule' : 'Standby'}</span>
+            </div>
+
+            {/* Interval Selector */}
+            <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1 text-xs">
+              <Clock size={13} className="text-cyan-400" />
+              <span className="text-[11px] text-slate-400 font-medium">Interval:</span>
+              <select
+                value={schedulerInterval}
+                onChange={(e) => handleIntervalChange(e.target.value)}
+                disabled={schedulerLoading}
+                className="bg-transparent text-white font-mono font-bold text-xs focus:outline-none cursor-pointer"
+              >
+                <option value={3} className="bg-slate-900 text-white">3m</option>
+                <option value={5} className="bg-slate-900 text-white">5m</option>
+                <option value={10} className="bg-slate-900 text-white">10m</option>
+                <option value={15} className="bg-slate-900 text-white">15m</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Right: Countdown, Auto-Execute toggle & Stats Pill */}
+          <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
+            {/* Next Run Countdown Display */}
+            {schedulerRunning && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-cyan-950/40 border border-cyan-800/60 font-mono text-xs">
+                <Timer size={14} className="text-cyan-400" />
+                <span className="text-slate-300">Next run in:</span>
+                <span className="font-bold text-cyan-300 tracking-wider">
+                  {countdownText || '--:--'}
+                </span>
+              </div>
+            )}
+
+            {/* Auto-Execute Toggle */}
+            <label className="flex items-center gap-2 cursor-pointer select-none bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-xl px-3 py-1.5 transition-colors">
+              <input
+                type="checkbox"
+                checked={autoExecute}
+                onChange={handleAutoExecuteToggle}
+                disabled={schedulerLoading}
+                className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-0 focus:ring-offset-0 bg-slate-900 border-slate-700 cursor-pointer accent-amber-500"
+              />
+              <span className="text-xs text-slate-300 font-medium whitespace-nowrap">
+                Auto-Execute Judge Trades
+              </span>
+              <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-bold font-mono">
+                Confidence ≥ 70%
+              </span>
+            </label>
+
+            {/* Stats Pill */}
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs font-mono">
+              <Zap size={13} className="text-purple-400" />
+              <span className="text-slate-400">Debates Run:</span>
+              <span className="font-bold text-white">{runCount}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Top Studio Control Bar */}
       <div className="bg-[#0D131F]/90 backdrop-blur-md border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
