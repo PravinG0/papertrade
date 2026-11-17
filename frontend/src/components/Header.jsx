@@ -122,9 +122,10 @@ export default function Header({
 
         {/* Center Live Indices Ribbon */}
         <div className="hidden lg:flex items-center gap-2.5">
-          {renderTicker('NIFTY', 'NIFTY 50', 23500)}
-          {renderTicker('BANKNIFTY', 'BANK NIFTY', 50200)}
-          {renderTicker('SENSEX', 'SENSEX', 77500)}
+          {renderTicker('NIFTY', 'NIFTY 50', 24980)}
+          {renderTicker('BANKNIFTY', 'BANK NIFTY', 52140)}
+          {renderTicker('FINNIFTY', 'FINNIFTY', 24450)}
+          {renderTicker('SENSEX', 'SENSEX', 81650)}
         </div>
 
         {/* Right Wallet & Actions */}
@@ -201,7 +202,24 @@ export default function Header({
                 className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-700/80 hover:border-cyan-500/50 text-xs transition-all shadow-inner"
                 title={`Logged in as ${user.username}`}
               >
-                <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-cyan-600 to-blue-600 text-white font-bold flex items-center justify-center text-[10px] shadow-sm">
+                {user.avatar_url ? (
+                  <img
+                    src={user.avatar_url}
+                    alt={user.username}
+                    referrerPolicy="no-referrer"
+                    className="w-5 h-5 rounded-full object-cover ring-1 ring-cyan-500/50 shrink-0"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                      const fallback = e.currentTarget.parentElement?.querySelector('.avatar-fallback');
+                      if (fallback) fallback.classList.remove('hidden');
+                    }}
+                  />
+                ) : null}
+                <div
+                  className={`avatar-fallback w-5 h-5 rounded-full bg-gradient-to-tr from-cyan-600 to-blue-600 text-white font-bold flex items-center justify-center text-[10px] shadow-sm shrink-0 ${
+                    user.avatar_url ? 'hidden' : ''
+                  }`}
+                >
                   {user.username ? user.username[0].toUpperCase() : 'U'}
                 </div>
                 <span className="font-semibold text-slate-200 tracking-wide max-w-[90px] truncate hidden sm:inline">
@@ -212,13 +230,30 @@ export default function Header({
 
               {showUserDropdown && (
                 <div
-                  className="absolute right-0 mt-2 w-48 bg-[#0b0f19] border border-slate-800 rounded-xl shadow-2xl shadow-black/80 py-1.5 z-50 text-xs"
+                  className="absolute right-0 mt-2 w-52 bg-[#0b0f19] border border-slate-800 rounded-xl shadow-2xl shadow-black/80 py-1.5 z-50 text-xs"
                   onClick={() => setShowUserDropdown(false)}
                 >
-                  <div className="px-3 py-2 border-b border-slate-800">
-                    <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Signed in as</p>
-                    <p className="font-semibold text-white truncate">{user.username}</p>
-                    <p className="text-[10px] text-cyan-400 truncate">{user.email}</p>
+                  <div className="px-3 py-2 border-b border-slate-800 flex items-center gap-2.5">
+                    {user.avatar_url ? (
+                      <img
+                        src={user.avatar_url}
+                        alt={user.username}
+                        referrerPolicy="no-referrer"
+                        className="w-8 h-8 rounded-full object-cover ring-1 ring-cyan-500/50 shrink-0"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-600 to-blue-600 text-white font-bold flex items-center justify-center text-xs shrink-0">
+                        {user.username ? user.username[0].toUpperCase() : 'U'}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Signed in as</p>
+                      <p className="font-semibold text-white truncate">{user.username}</p>
+                      <p className="text-[10px] text-cyan-400 truncate">{user.email}</p>
+                    </div>
                   </div>
                   <button
                     onClick={() => {

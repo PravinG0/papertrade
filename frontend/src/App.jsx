@@ -37,9 +37,10 @@ export default function App() {
 
   // Market indices
   const [indices, setIndices] = useState({
-    NIFTY: { ltp: 23525.50, change: 85.20, change_pct: 0.36 },
-    BANKNIFTY: { ltp: 50320.10, change: 180.45, change_pct: 0.36 },
-    SENSEX: { ltp: 77580.00, change: 250.00, change_pct: 0.32 },
+    NIFTY: { ltp: 24980.50, change: 85.20, change_pct: 0.36 },
+    BANKNIFTY: { ltp: 52140.10, change: 180.45, change_pct: 0.36 },
+    FINNIFTY: { ltp: 24450.00, change: 45.10, change_pct: 0.18 },
+    SENSEX: { ltp: 81650.00, change: 250.00, change_pct: 0.32 },
   });
 
   // Portfolio & Trading State

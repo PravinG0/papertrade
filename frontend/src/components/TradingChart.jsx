@@ -40,7 +40,17 @@ function calculateEMA(candles, period) {
 
 function generateMockCandles(symbol, interval, isOption = false, base = null) {
   const isBank = symbol === 'BANKNIFTY';
-  let basePrice = base || (isOption ? 145.0 : isBank ? 50250 : 23550);
+  let basePrice =
+    base ||
+    (isOption
+      ? 145.0
+      : symbol === 'BANKNIFTY'
+      ? 52150
+      : symbol === 'SENSEX'
+      ? 81650
+      : symbol === 'FINNIFTY'
+      ? 24450
+      : 24980);
   const nowSec = Math.floor(Date.now() / 1000);
   const stepSec = interval === '1m' ? 60 : interval === '5m' ? 300 : interval === '15m' ? 900 : 86400;
   const count = 100;
@@ -393,7 +403,7 @@ export default function TradingChart({
         {/* Left: Index Selector */}
         <div className="flex items-center gap-2">
           <div className="flex items-center bg-slate-900 p-0.5 rounded-lg border border-slate-800">
-            {['NIFTY', 'BANKNIFTY', 'SENSEX'].map((idx) => (
+            {['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'SENSEX'].map((idx) => (
               <button
                 key={idx}
                 onClick={() => {

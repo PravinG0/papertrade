@@ -28,8 +28,8 @@ export default function OptionChain({
   const [expiries, setExpiries] = useState([]);
   const [viewFilter, setViewFilter] = useState('ALL'); // 'ALL' | 'CALLS' | 'PUTS'
 
-  const lotSize = selectedIndex === 'BANKNIFTY' ? 15 : 25;
-  const strikeStep = selectedIndex === 'BANKNIFTY' ? 100 : 50;
+  const lotSize = selectedIndex === 'BANKNIFTY' ? 15 : selectedIndex === 'SENSEX' ? 10 : 25;
+  const strikeStep = selectedIndex === 'BANKNIFTY' || selectedIndex === 'SENSEX' ? 100 : 50;
 
   // Load available expiries
   useEffect(() => {
@@ -162,26 +162,24 @@ export default function OptionChain({
         <div className="flex flex-wrap items-center gap-2">
           {/* Index Selector */}
           <div className="flex items-center bg-slate-900 p-0.5 rounded-lg border border-slate-800">
-            <button
-              onClick={() => onSelectIndex('NIFTY')}
-              className={`px-2.5 py-1 rounded text-xs font-bold transition-all ${
-                selectedIndex === 'NIFTY'
-                  ? 'bg-cyan-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              NIFTY 50
-            </button>
-            <button
-              onClick={() => onSelectIndex('BANKNIFTY')}
-              className={`px-2.5 py-1 rounded text-xs font-bold transition-all ${
-                selectedIndex === 'BANKNIFTY'
-                  ? 'bg-cyan-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              BANK NIFTY
-            </button>
+            {[
+              { id: 'NIFTY', label: 'NIFTY 50' },
+              { id: 'BANKNIFTY', label: 'BANK NIFTY' },
+              { id: 'FINNIFTY', label: 'FINNIFTY' },
+              { id: 'SENSEX', label: 'SENSEX' },
+            ].map((idx) => (
+              <button
+                key={idx.id}
+                onClick={() => onSelectIndex(idx.id)}
+                className={`px-2 py-1 rounded text-xs font-bold transition-all ${
+                  selectedIndex === idx.id
+                    ? 'bg-cyan-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {idx.label}
+              </button>
+            ))}
           </div>
 
           {/* Expiry Dropdown */}
