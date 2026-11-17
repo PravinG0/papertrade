@@ -67,6 +67,16 @@ export default function StrategyPayoff({
         { strike: atm + strikeStep * 3, option_type: 'CE', side: 'BUY', lots: 1, price: 28 },
       ],
     },
+    IRON_BUTTERFLY: {
+      name: 'Iron Butterfly',
+      desc: 'Defined-risk high-theta neutral strategy centered at ATM.',
+      legs: [
+        { strike: atm - strikeStep * 2, option_type: 'PE', side: 'BUY', lots: 1, price: 35 },
+        { strike: atm, option_type: 'PE', side: 'SELL', lots: 1, price: 125 },
+        { strike: atm, option_type: 'CE', side: 'SELL', lots: 1, price: 130 },
+        { strike: atm + strikeStep * 2, option_type: 'CE', side: 'BUY', lots: 1, price: 40 },
+      ],
+    },
   };
 
   const [selectedTemplate, setSelectedTemplate] = useState('BULL_CALL_SPREAD');
