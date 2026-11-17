@@ -1,8 +1,17 @@
 import axios from 'axios';
 
+const getBaseUrl = () => {
+  const envUrl = import.meta.env?.VITE_API_URL;
+  if (envUrl && envUrl.trim()) {
+    const clean = envUrl.trim().replace(/\/$/, '');
+    return clean.endsWith('/api') ? clean : `${clean}/api`;
+  }
+  return '/api';
+};
+
 const api = axios.create({
-  baseURL: '/api',
-  timeout: 10000,
+  baseURL: getBaseUrl(),
+  timeout: 20000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -123,9 +132,9 @@ export const getPnlCalendar = () =>
 export const getStrategyPayoff = (payload) =>
   api.post('/analytics/payoff', payload);
 
-// AI Debate Studio Endpoints
+// AI Debate Studio Endpoints (90-second timeout to allow Bull, Bear & Judge LLM deliberation)
 export const runDebate = (symbol = 'NIFTY') =>
-  api.post('/debate/run', { symbol });
+  api.post('/debate/run', { symbol }, { timeout: 90000 });
 
 export const getLatestDebate = (symbol = null) =>
   api.get('/debate/latest', { params: symbol ? { symbol } : {} });
@@ -138,7 +147,7 @@ export const executeDebateVerdict = (debateId, payload = {}) =>
 
 // Auto-Debate Scheduler Endpoints
 export const startScheduler = (payload = {}) =>
-  api.post('/scheduler/start', payload);
+  api.post('/scheduler/start', payload, { timeout: 30000 });
 
 export const stopScheduler = () =>
   api.post('/scheduler/stop');

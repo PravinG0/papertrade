@@ -1,12 +1,40 @@
+# Dependencies
 node_modules/
+frontend/node_modules/
+
+# Python Cache & Virtual Environments
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Build Outputs
 dist/
 frontend/dist/
+build/
+
+# Environment & Secrets (NEVER COMMIT)
+.env
+*.env
+!.env.example
 .env.local
-.DS_Store
+.env.*.local
+*.backup
+
+# Databases & Local Storage
 *.db
 *.sqlite
 *.sqlite3
-*.png
+backend/papertrade.db
 backend/debate_sessions.json
+backend/scrip_master_cache.json
+
+# Operating System & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = Field(default="")
     GEMINI_MODEL: str = Field(default="gemini-3.8-flash")
 
+    # ── Keep-Alive / Render Self-Ping Configuration ────────────────────────
+    RENDER_EXTERNAL_URL: str = Field(default="")
+    KEEP_ALIVE_INTERVAL_SECONDS: int = Field(default=600)  # 10 minutes (prevents Render 15-min idle sleep)
+    ENABLE_KEEP_ALIVE: bool = Field(default=True)
+
     # ── Scrip Master Cache Path ───────────────────────────────────────────
     SCRIP_CACHE_PATH: str = Field(
         default=str(Path(__file__).resolve().parent / "scrip_master_cache.json")

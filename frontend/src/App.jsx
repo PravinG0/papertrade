@@ -212,10 +212,20 @@ export default function App() {
     let isMounted = true;
 
     function connectWs() {
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsHost = window.location.hostname || 'localhost';
       const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-      const wsUrl = `${wsProtocol}//${wsHost}:8000/ws/terminal${tokenParam}`;
+      let wsUrl = '';
+
+      if (import.meta.env.VITE_WS_URL) {
+        const base = import.meta.env.VITE_WS_URL.replace(/\/$/, '');
+        wsUrl = `${base}/ws/terminal${tokenParam}`;
+      } else if (import.meta.env.VITE_API_URL) {
+        const wsBase = import.meta.env.VITE_API_URL.replace(/^http/, 'ws').replace(/\/$/, '');
+        wsUrl = `${wsBase}/ws/terminal${tokenParam}`;
+      } else {
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsHost = window.location.hostname || 'localhost';
+        wsUrl = `${wsProtocol}//${wsHost}:8000/ws/terminal${tokenParam}`;
+      }
 
       try {
         ws = new WebSocket(wsUrl);

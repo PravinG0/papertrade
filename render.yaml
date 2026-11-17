@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: tradelab-papertrade-backend
+    env: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: PORT
+        value: 10000
+      - key: ENABLE_KEEP_ALIVE
+        value: "true"
+      - key: KEEP_ALIVE_INTERVAL_SECONDS
+        value: "600"
+      - key: DATABASE_URL
+        value: sqlite+aiosqlite:///backend/papertrade.db
+      - key: VIRTUAL_STARTING_CAPITAL
+        value: "1000000.0"
+      - key: ANGEL_API_KEY
+        sync: false
+      - key: ANGEL_CLIENT_CODE
+        sync: false
+      - key: ANGEL_PIN
+        sync: false
+      - key: ANGEL_TOTP_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.8-flash
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: JWT_SECRET_KEY
+        generateValue: true

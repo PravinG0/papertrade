@@ -27,6 +27,7 @@ from config import INDEX_CONFIG, normalize_index_symbol, settings
 from database import UserModel, init_db
 from debate_engine import debate_engine
 from greeks import BlackScholesEngine
+from keep_alive import keep_alive_manager
 from paper_engine import paper_engine
 from replay_engine import replay_engine
 from scheduler import get_scheduler
@@ -124,9 +125,15 @@ async def lifespan(app: FastAPI):
     # Attempt initial auth
     asyncio.create_task(angel_service.authenticate())
     _mtm_task = asyncio.create_task(_periodic_mtm_loop())
+    if getattr(settings, "ENABLE_KEEP_ALIVE", True):
+        asyncio.create_task(keep_alive_manager.start())
     yield
     if _mtm_task and not _mtm_task.done():
         _mtm_task.cancel()
+    try:
+        await keep_alive_manager.stop()
+    except Exception as exc:
+        logger.warning("Error stopping keep-alive service: %s", exc)
     try:
         await get_scheduler().stop()
     except Exception as exc:
@@ -256,6 +263,31 @@ async def websocket_terminal_endpoint(websocket: WebSocket, token: Optional[str]
 
 
 # ── System & Status Endpoints ────────────────────────────────────────────────
+@app.get("/api/health")
+@app.get("/healthz")
+@app.get("/api/ping")
+async def health_check():
+    """Lightweight 200 OK endpoint to reset cloud hosting idle timers (Render, Railway)."""
+    return {
+        "status": "ok",
+        "service": "TradeLab Paper Trading Engine",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "keep_alive": keep_alive_manager.get_status(),
+    }
+
+
+@app.get("/api/keep-alive/status")
+async def get_keep_alive_status():
+    """Return diagnostics on the Render self-ping keep-alive loop."""
+    return keep_alive_manager.get_status()
+
+
+@app.post("/api/keep-alive/ping")
+async def trigger_manual_keep_alive_ping():
+    """Manually dispatch a keep-alive heartbeat ping immediately."""
+    return await keep_alive_manager.ping_once()
+
+
 @app.get("/api/status")
 async def get_system_status():
     """Return platform and Angel One connection health status."""
