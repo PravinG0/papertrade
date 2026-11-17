@@ -576,10 +576,11 @@ async def calculate_payoff_endpoint(req: PayoffRequest):
 
     spot = req.spot
     if spot is None or spot <= 0:
-        quote = await angel_service.get_quote(req.symbol)
-        spot = quote.get("ltp", 25400.0)
+        spot = await angel_service.get_spot_price(req.symbol)
+        if not spot or spot <= 0:
+            spot = 25400.0 if req.symbol == "NIFTY" else 52000.0
     legs_dicts = [leg.model_dump() for leg in req.legs]
-    return calculate_strategy_payoff(spot=spot, legs=legs_dicts)
+    return calculate_strategy_payoff(spot=float(spot), legs=legs_dicts)
 
 
 # ── AI Debate Studio Endpoints ───────────────────────────────────────────────

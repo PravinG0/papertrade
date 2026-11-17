@@ -355,6 +355,11 @@ export default function OptionChain({
                 const ce = row.ce || {};
                 const pe = row.pe || {};
 
+                const ceIv = ce.greeks?.iv ?? ce.iv;
+                const ceDelta = ce.greeks?.delta ?? ce.delta;
+                const peIv = pe.greeks?.iv ?? pe.iv;
+                const peDelta = pe.greeks?.delta ?? pe.delta;
+
                 const ceOi = Number(ce.oi || 0);
                 const peOi = Number(pe.oi || 0);
 
@@ -396,12 +401,12 @@ export default function OptionChain({
 
                         {/* Call IV */}
                         <td className={`py-1.5 px-2 text-right text-slate-400 ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
-                          {ce.iv != null ? ce.iv : '—'}
+                          {ceIv != null ? ceIv : '—'}
                         </td>
 
                         {/* Call Delta */}
                         <td className={`py-1.5 px-2 text-right text-emerald-400 font-medium ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
-                          {ce.delta != null ? ce.delta : '—'}
+                          {ceDelta != null ? ceDelta : '—'}
                         </td>
 
                         {/* Call Bid */}
@@ -565,12 +570,12 @@ export default function OptionChain({
 
                         {/* Put Delta */}
                         <td className={`py-1.5 px-2 text-left text-rose-400 font-medium ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
-                          {pe.delta != null ? pe.delta : '—'}
+                          {peDelta != null ? peDelta : '—'}
                         </td>
 
                         {/* Put IV */}
                         <td className={`py-1.5 px-2 text-left text-slate-400 ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
-                          {pe.iv != null ? pe.iv : '—'}
+                          {peIv != null ? peIv : '—'}
                         </td>
 
                         {/* Put Volume */}
