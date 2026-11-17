@@ -27,6 +27,7 @@ export default function OptionChain({
   const [selectedExpiry, setSelectedExpiry] = useState('');
   const [expiries, setExpiries] = useState([]);
   const [viewFilter, setViewFilter] = useState('ALL'); // 'ALL' | 'CALLS' | 'PUTS'
+  const [showTheta, setShowTheta] = useState(false);
 
   const lotSize = selectedIndex === 'BANKNIFTY' ? 15 : selectedIndex === 'SENSEX' ? 10 : 25;
   const strikeStep = selectedIndex === 'BANKNIFTY' || selectedIndex === 'SENSEX' ? 100 : 50;
@@ -247,6 +248,15 @@ export default function OptionChain({
             >
               Puts
             </button>
+            <button
+              onClick={() => setShowTheta(!showTheta)}
+              className={`px-2 py-1 rounded font-semibold transition-all border-l border-slate-800 ${
+                showTheta ? 'bg-amber-600/80 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Toggle Option Theta (₹/day decay)"
+            >
+              θ Theta
+            </button>
           </div>
 
           {/* Spot price badge */}
@@ -277,7 +287,7 @@ export default function OptionChain({
             <tr>
               {(viewFilter === 'ALL' || viewFilter === 'CALLS') && (
                 <th
-                  colSpan={viewFilter === 'CALLS' ? 8 : 8}
+                  colSpan={showTheta ? 9 : 8}
                   className="py-1.5 px-3 text-center bg-emerald-950/40 text-emerald-400 font-bold uppercase tracking-wider text-[11px] border-r border-slate-800"
                 >
                   CALLS (CE) • {selectedIndex}
@@ -290,7 +300,7 @@ export default function OptionChain({
 
               {(viewFilter === 'ALL' || viewFilter === 'PUTS') && (
                 <th
-                  colSpan={viewFilter === 'PUTS' ? 8 : 8}
+                  colSpan={showTheta ? 9 : 8}
                   className="py-1.5 px-3 text-center bg-rose-950/40 text-rose-400 font-bold uppercase tracking-wider text-[11px]"
                 >
                   PUTS (PE) • {selectedIndex}
@@ -307,6 +317,7 @@ export default function OptionChain({
                   <th className="py-2 px-2 text-right">Vol</th>
                   <th className="py-2 px-2 text-right">IV</th>
                   <th className="py-2 px-2 text-right">Delta</th>
+                  {showTheta && <th className="py-2 px-2 text-right text-amber-400">θ Theta</th>}
                   <th className="py-2 px-2 text-right">Bid</th>
                   <th className="py-2 px-2 text-right">Ask</th>
                   <th className="py-2 px-2 text-right font-bold text-slate-200">LTP</th>
@@ -327,6 +338,7 @@ export default function OptionChain({
                   <th className="py-2 px-2 text-left">Bid</th>
                   <th className="py-2 px-2 text-left">Ask</th>
                   <th className="py-2 px-2 text-left">Delta</th>
+                  {showTheta && <th className="py-2 px-2 text-left text-amber-400">θ Theta</th>}
                   <th className="py-2 px-2 text-left">IV</th>
                   <th className="py-2 px-2 text-left">Vol</th>
                   <th className="py-2 px-2 text-left">OI (Bar)</th>
@@ -338,7 +350,10 @@ export default function OptionChain({
           <tbody className="divide-y divide-slate-800/60 font-mono text-[11px]">
             {chain.length === 0 ? (
               <tr>
-                <td colSpan={viewFilter === 'ALL' ? 17 : 9} className="py-12 text-center text-slate-500 font-sans">
+                <td
+                  colSpan={viewFilter === 'ALL' ? (showTheta ? 19 : 17) : (showTheta ? 10 : 9)}
+                  className="py-12 text-center text-slate-500 font-sans"
+                >
                   {loading ? 'Fetching option chain...' : 'No option chain data available.'}
                 </td>
               </tr>
@@ -406,6 +421,13 @@ export default function OptionChain({
                         <td className={`py-1.5 px-2 text-right text-emerald-400 font-medium ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
                           {ceDelta != null ? ceDelta : '—'}
                         </td>
+
+                        {/* Call Theta */}
+                        {showTheta && (
+                          <td className={`py-1.5 px-2 text-right text-amber-400 font-mono text-[10px] ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
+                            {ce.greeks?.theta != null ? Number(ce.greeks.theta).toFixed(1) : '—'}
+                          </td>
+                        )}
 
                         {/* Call Bid */}
                         <td className={`py-1.5 px-2 text-right text-slate-400 ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
@@ -565,6 +587,13 @@ export default function OptionChain({
                         <td className={`py-1.5 px-2 text-left text-slate-400 ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
                           {pe.ask != null ? Number(pe.ask).toFixed(2) : '—'}
                         </td>
+
+                        {/* Put Theta */}
+                        {showTheta && (
+                          <td className={`py-1.5 px-2 text-left text-amber-400 font-mono text-[10px] ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
+                            {pe.greeks?.theta != null ? Number(pe.greeks.theta).toFixed(1) : '—'}
+                          </td>
+                        )}
 
                         {/* Put Delta */}
                         <td className={`py-1.5 px-2 text-left text-rose-400 font-medium ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
