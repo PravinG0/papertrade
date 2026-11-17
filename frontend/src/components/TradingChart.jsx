@@ -343,7 +343,7 @@ function ChartPane({
   return (
     <div className="flex flex-col h-full bg-[#080c14] border border-slate-800 rounded-lg overflow-hidden">
       {/* Pane Top Bar */}
-      <div className="p-2 bg-[#0c1322] border-b border-slate-800 flex items-center justify-between gap-1 text-[11px]">
+      <div className="p-2 bg-[#0c1322] border-b border-slate-800 flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
         <div className="flex items-center gap-1.5">
           <span
             className={`px-2 py-0.5 rounded font-mono font-bold text-[11px] ${
@@ -437,7 +437,7 @@ function ChartPane({
 
       {/* Pane Legend */}
       {legendData && (
-        <div className="px-2.5 py-1 bg-slate-950/90 border-b border-slate-850 flex items-center gap-2 text-[10px] font-mono select-none">
+        <div className="px-2.5 py-1 bg-slate-950/90 border-b border-slate-800 flex flex-wrap items-center gap-2 text-[10px] font-mono select-none">
           <span className="text-slate-400">O: <b className="text-slate-200">{legendData.open?.toFixed(2)}</b></span>
           <span className="text-slate-400">H: <b className="text-slate-200">{legendData.high?.toFixed(2)}</b></span>
           <span className="text-slate-400">L: <b className="text-slate-200">{legendData.low?.toFixed(2)}</b></span>

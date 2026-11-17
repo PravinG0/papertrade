@@ -331,7 +331,7 @@ export default function OptionChain({
 
       {/* Main Table */}
       <div className="flex-1 overflow-x-auto overflow-y-auto">
-        <table className="w-full border-collapse text-xs select-none">
+        <table className="w-full min-w-[850px] border-collapse text-xs select-none">
           <thead className="sticky top-0 z-20 bg-[#080c14] border-b border-slate-800 shadow-sm">
             {/* Top Super-headers */}
             <tr>

@@ -51,3 +51,16 @@ body {
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(51, 65, 85, 0.5);
 }
+
+/* Hide scrollbar utility for sleek mobile touch-scroll ribbons */
+.scrollbar-none::-webkit-scrollbar,
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-none,
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}

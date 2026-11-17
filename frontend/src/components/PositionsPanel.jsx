@@ -86,7 +86,7 @@ export default function PositionsPanel({
 
       {/* Positions Table */}
       <div className="flex-1 overflow-x-auto overflow-y-auto">
-        <table className="w-full border-collapse text-xs select-none">
+        <table className="w-full min-w-[560px] border-collapse text-xs select-none">
           <thead>
             <tr className="bg-slate-950/80 text-[10px] uppercase font-mono text-slate-400 border-b border-slate-800">
               <th className="py-2 px-3 text-left">Instrument</th>

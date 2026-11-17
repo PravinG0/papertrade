@@ -151,7 +151,7 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
       <div
-        className="relative w-full max-w-md bg-[#0b0f19] border border-slate-800 rounded-2xl shadow-2xl shadow-black/80 overflow-hidden"
+        className="relative w-full max-w-md max-h-[92vh] flex flex-col bg-[#0b0f19] border border-slate-800 rounded-2xl shadow-2xl shadow-black/80 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Glow Header Accent */}
@@ -216,7 +216,7 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
         </div>
 
         {/* Form Body */}
-        <div className="p-6">
+        <div className="p-4 sm:p-6 overflow-y-auto flex-1">
           {error && (
             <div className="mb-4 p-3 rounded-xl bg-rose-950/60 border border-rose-800/80 flex items-start gap-2.5 text-xs text-rose-300">
               <AlertCircle size={16} className="text-rose-400 shrink-0 mt-0.5" />

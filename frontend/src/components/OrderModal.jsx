@@ -86,7 +86,7 @@ export default function OrderModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl">
+      <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md max-h-[92vh] flex flex-col rounded-2xl overflow-hidden shadow-2xl">
         {/* Top Header */}
         <div
           className={`p-4 flex items-center justify-between border-b ${
@@ -127,7 +127,7 @@ export default function OrderModal({
         </div>
 
         {/* Modal Body Form */}
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto flex-1">
           {error && (
             <div className="p-2.5 rounded-lg bg-rose-950/80 border border-rose-700 text-rose-300 text-xs flex items-center gap-2">
               <AlertCircle size={14} className="flex-shrink-0" />

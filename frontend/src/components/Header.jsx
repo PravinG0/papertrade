@@ -129,29 +129,29 @@ export default function Header({
         </div>
 
         {/* Right Wallet & Actions */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           {/* Virtual Wallet */}
-          <div className="flex items-center gap-3 px-3 py-1.5 bg-slate-900/90 rounded-xl border border-slate-800 shadow-inner">
+          <div className="flex items-center gap-2 sm:gap-3 px-2 sm:px-3 py-1 sm:py-1.5 bg-slate-900/90 rounded-xl border border-slate-800 shadow-inner">
             <div className="flex items-center gap-1.5 text-slate-400 text-xs">
-              <Wallet size={14} className="text-cyan-400" />
+              <Wallet size={13} className="text-cyan-400 shrink-0" />
               <div className="flex flex-col">
-                <span className="text-[9px] uppercase tracking-wider text-slate-400 font-semibold">Virtual Capital</span>
-                <span className="font-mono font-bold text-white text-xs num-tabular">
-                  ₹{Number(capital).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                <span className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 font-semibold">Capital</span>
+                <span className="font-mono font-bold text-white text-[11px] sm:text-xs num-tabular">
+                  ₹{Number(capital).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                 </span>
               </div>
             </div>
 
-            <div className="h-6 w-px bg-slate-800" />
+            <div className="h-5 sm:h-6 w-px bg-slate-800" />
 
             <div className="flex flex-col text-right">
-              <span className="text-[9px] uppercase tracking-wider text-slate-400 font-semibold">Net P&L</span>
+              <span className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 font-semibold">Net P&L</span>
               <span
-                className={`font-mono font-bold text-xs num-tabular ${
+                className={`font-mono font-bold text-[11px] sm:text-xs num-tabular ${
                   netPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'
                 }`}
               >
-                {netPnl >= 0 ? '+' : ''}₹{Number(netPnl).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {netPnl >= 0 ? '+' : ''}₹{Number(netPnl).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
               </span>
             </div>
           </div>
@@ -281,9 +281,17 @@ export default function Header({
         </div>
       </div>
 
+      {/* Mobile Live Indices Ribbon (< lg screens) */}
+      <div className="flex lg:hidden items-center gap-2 px-3 py-1 bg-[#05080f] border-t border-slate-800/60 overflow-x-auto scrollbar-none text-xs">
+        {renderTicker('NIFTY', 'NIFTY 50', 24980)}
+        {renderTicker('BANKNIFTY', 'BANK NIFTY', 52140)}
+        {renderTicker('FINNIFTY', 'FINNIFTY', 24450)}
+        {renderTicker('SENSEX', 'SENSEX', 81650)}
+      </div>
+
       {/* Sub-bar: Navigation Tabs & Mobile Ticker */}
-      <div className="px-4 py-1.5 bg-slate-950/90 border-t border-slate-800/80 flex items-center justify-between gap-2 overflow-x-auto">
-        <div className="flex items-center gap-1 text-xs">
+      <div className="px-3 sm:px-4 py-1.5 bg-slate-950/90 border-t border-slate-800/80 flex items-center justify-between gap-2 overflow-x-auto scrollbar-none">
+        <div className="flex items-center gap-1 text-xs shrink-0">
           <button
             onClick={() => setActiveTab('terminal')}
             className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all ${

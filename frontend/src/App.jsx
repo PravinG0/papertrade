@@ -508,9 +508,9 @@ export default function App() {
       <main className="flex-1 p-3 lg:p-4 max-w-[1920px] w-full mx-auto">
         {/* Tab 1: Terminal (Split Option Chain + Chart + Positions) */}
         {activeTab === 'terminal' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 h-[calc(100vh-140px)] min-h-[700px]">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 h-auto lg:h-[calc(100vh-135px)] lg:min-h-[660px]">
             {/* Left 7 Columns: Complete Option Chain */}
-            <div className="lg:col-span-7 h-full flex flex-col min-h-[420px]">
+            <div className="lg:col-span-7 h-[540px] sm:h-[620px] lg:h-full flex flex-col min-h-[420px]">
               <OptionChain
                 selectedIndex={selectedIndex}
                 onSelectIndex={(idx) => {
@@ -544,9 +544,9 @@ export default function App() {
             </div>
 
             {/* Right 5 Columns: Split Top = Chart, Bottom = Positions / Orders */}
-            <div className="lg:col-span-5 flex flex-col gap-3 h-full overflow-hidden">
+            <div className="lg:col-span-5 flex flex-col gap-3 h-auto lg:h-full">
               {/* Top Half: Responsive Candlestick Chart */}
-              <div className="h-[44%] min-h-[260px]">
+              <div className="h-[340px] sm:h-[380px] lg:h-[44%] lg:min-h-[260px]">
                 <TradingChart
                   selectedIndex={selectedIndex}
                   contract={selectedContract}
@@ -567,7 +567,7 @@ export default function App() {
               />
 
               {/* Bottom Half: Tabs for Positions & Orders */}
-              <div className="flex-1 flex flex-col min-h-[260px] overflow-hidden">
+              <div className="h-[360px] sm:h-[400px] lg:h-auto lg:flex-1 flex flex-col min-h-[260px] overflow-hidden">
                 {/* Panel Switcher Tab Header */}
                 <div className="flex items-center gap-1 mb-1.5 bg-slate-900/60 p-1 rounded-lg border border-slate-800 text-xs w-fit">
                   <button
