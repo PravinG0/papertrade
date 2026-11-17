@@ -10,6 +10,10 @@ import {
   TrendingUp,
   Percent,
   BarChart2,
+  ShoppingBag,
+  Plus,
+  Trash2,
+  Zap,
 } from 'lucide-react';
 import { getOptionChain, getExpiries } from '../api';
 
@@ -19,6 +23,7 @@ export default function OptionChain({
   spotPrice = 0,
   onOpenOrder = () => {},
   onSelectContract = () => {},
+  onExecuteBasket = null,
 }) {
   const [chain, setChain] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -28,6 +33,39 @@ export default function OptionChain({
   const [expiries, setExpiries] = useState([]);
   const [viewFilter, setViewFilter] = useState('ALL'); // 'ALL' | 'CALLS' | 'PUTS'
   const [showTheta, setShowTheta] = useState(false);
+  const [basketMode, setBasketMode] = useState(false);
+  const [basketLegs, setBasketLegs] = useState([]);
+  const [executingBasket, setExecutingBasket] = useState(false);
+
+  const addBasketLeg = (strike, option_type, side, price) => {
+    setBasketLegs((prev) => [
+      ...prev,
+      { strike, option_type, side, price, lots: 1 },
+    ]);
+  };
+
+  const removeBasketLeg = (index) => {
+    setBasketLegs((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const clearBasket = () => {
+    setBasketLegs([]);
+  };
+
+  const handleExecuteBasket = async () => {
+    if (basketLegs.length === 0) return;
+    if (!window.confirm(`Execute all ${basketLegs.length} legs simultaneously in your virtual account?`)) return;
+    setExecutingBasket(true);
+    try {
+      if (onExecuteBasket) {
+        await onExecuteBasket(basketLegs);
+      }
+      setBasketLegs([]);
+      setBasketMode(false);
+    } finally {
+      setExecutingBasket(false);
+    }
+  };
 
   const lotSize = selectedIndex === 'BANKNIFTY' ? 15 : selectedIndex === 'SENSEX' ? 10 : 25;
   const strikeStep = selectedIndex === 'BANKNIFTY' || selectedIndex === 'SENSEX' ? 100 : 50;
@@ -257,6 +295,18 @@ export default function OptionChain({
             >
               θ Theta
             </button>
+            <button
+              onClick={() => setBasketMode(!basketMode)}
+              className={`px-2 py-1 rounded font-semibold transition-all border-l border-slate-800 flex items-center gap-1 ${
+                basketMode || basketLegs.length > 0
+                  ? 'bg-purple-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Multi-Leg Strategy Basket Builder"
+            >
+              <ShoppingBag size={11} />
+              <span>Basket{basketLegs.length > 0 ? ` (${basketLegs.length})` : ''}</span>
+            </button>
           </div>
 
           {/* Spot price badge */}
@@ -458,42 +508,63 @@ export default function OptionChain({
                             >
                               <BarChart2 size={12} />
                             </button>
-                            <button
-                              onClick={() =>
-                                onOpenOrder({
-                                  symbol: selectedIndex,
-                                  strike,
-                                  optionType: 'CE',
-                                  side: 'BUY',
-                                  ltp: ceLtp,
-                                  bid: ce.bid || ceLtp,
-                                  ask: ce.ask || ceLtp,
-                                  lotSize,
-                                })
-                              }
-                              className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow transition-all active:scale-95"
-                              title={`Buy ${selectedIndex} ${strike} CE`}
-                            >
-                              BUY
-                            </button>
-                            <button
-                              onClick={() =>
-                                onOpenOrder({
-                                  symbol: selectedIndex,
-                                  strike,
-                                  optionType: 'CE',
-                                  side: 'SELL',
-                                  ltp: ceLtp,
-                                  bid: ce.bid || ceLtp,
-                                  ask: ce.ask || ceLtp,
-                                  lotSize,
-                                })
-                              }
-                              className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-600/80 hover:bg-rose-500 text-white shadow transition-all active:scale-95"
-                              title={`Sell ${selectedIndex} ${strike} CE`}
-                            >
-                              SELL
-                            </button>
+                            {basketMode ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => addBasketLeg(strike, 'CE', 'BUY', ceLtp)}
+                                  className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-600 hover:bg-purple-500 text-white shadow"
+                                  title={`Add BUY ${strike} CE to Basket`}
+                                >
+                                  +B
+                                </button>
+                                <button
+                                  onClick={() => addBasketLeg(strike, 'CE', 'SELL', ceLtp)}
+                                  className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-600 hover:bg-amber-500 text-white shadow"
+                                  title={`Add SELL ${strike} CE to Basket`}
+                                >
+                                  +S
+                                </button>
+                              </div>
+                            ) : (
+                              <>
+                                <button
+                                  onClick={() =>
+                                    onOpenOrder({
+                                      symbol: selectedIndex,
+                                      strike,
+                                      optionType: 'CE',
+                                      side: 'BUY',
+                                      ltp: ceLtp,
+                                      bid: ce.bid || ceLtp,
+                                      ask: ce.ask || ceLtp,
+                                      lotSize,
+                                    })
+                                  }
+                                  className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow transition-all active:scale-95"
+                                  title={`Buy ${selectedIndex} ${strike} CE`}
+                                >
+                                  BUY
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    onOpenOrder({
+                                      symbol: selectedIndex,
+                                      strike,
+                                      optionType: 'CE',
+                                      side: 'SELL',
+                                      ltp: ceLtp,
+                                      bid: ce.bid || ceLtp,
+                                      ask: ce.ask || ceLtp,
+                                      lotSize,
+                                    })
+                                  }
+                                  className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-600/80 hover:bg-rose-500 text-white shadow transition-all active:scale-95"
+                                  title={`Sell ${selectedIndex} ${strike} CE`}
+                                >
+                                  SELL
+                                </button>
+                              </>
+                            )}
                           </div>
                         </td>
                       </>
@@ -523,42 +594,63 @@ export default function OptionChain({
                         {/* Put Action Buttons (Buy & Sell & Chart) */}
                         <td className={`py-1.5 px-2 text-center ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
                           <div className="flex items-center justify-center gap-1 font-sans">
-                            <button
-                              onClick={() =>
-                                onOpenOrder({
-                                  symbol: selectedIndex,
-                                  strike,
-                                  optionType: 'PE',
-                                  side: 'BUY',
-                                  ltp: peLtp,
-                                  bid: pe.bid || peLtp,
-                                  ask: pe.ask || peLtp,
-                                  lotSize,
-                                })
-                              }
-                              className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow transition-all active:scale-95"
-                              title={`Buy ${selectedIndex} ${strike} PE`}
-                            >
-                              BUY
-                            </button>
-                            <button
-                              onClick={() =>
-                                onOpenOrder({
-                                  symbol: selectedIndex,
-                                  strike,
-                                  optionType: 'PE',
-                                  side: 'SELL',
-                                  ltp: peLtp,
-                                  bid: pe.bid || peLtp,
-                                  ask: pe.ask || peLtp,
-                                  lotSize,
-                                })
-                              }
-                              className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-600/80 hover:bg-rose-500 text-white shadow transition-all active:scale-95"
-                              title={`Sell ${selectedIndex} ${strike} PE`}
-                            >
-                              SELL
-                            </button>
+                            {basketMode ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => addBasketLeg(strike, 'PE', 'BUY', peLtp)}
+                                  className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-600 hover:bg-purple-500 text-white shadow"
+                                  title={`Add BUY ${strike} PE to Basket`}
+                                >
+                                  +B
+                                </button>
+                                <button
+                                  onClick={() => addBasketLeg(strike, 'PE', 'SELL', peLtp)}
+                                  className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-600 hover:bg-amber-500 text-white shadow"
+                                  title={`Add SELL ${strike} PE to Basket`}
+                                >
+                                  +S
+                                </button>
+                              </div>
+                            ) : (
+                              <>
+                                <button
+                                  onClick={() =>
+                                    onOpenOrder({
+                                      symbol: selectedIndex,
+                                      strike,
+                                      optionType: 'PE',
+                                      side: 'BUY',
+                                      ltp: peLtp,
+                                      bid: pe.bid || peLtp,
+                                      ask: pe.ask || peLtp,
+                                      lotSize,
+                                    })
+                                  }
+                                  className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow transition-all active:scale-95"
+                                  title={`Buy ${selectedIndex} ${strike} PE`}
+                                >
+                                  BUY
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    onOpenOrder({
+                                      symbol: selectedIndex,
+                                      strike,
+                                      optionType: 'PE',
+                                      side: 'SELL',
+                                      ltp: peLtp,
+                                      bid: pe.bid || peLtp,
+                                      ask: pe.ask || peLtp,
+                                      lotSize,
+                                    })
+                                  }
+                                  className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-600/80 hover:bg-rose-500 text-white shadow transition-all active:scale-95"
+                                  title={`Sell ${selectedIndex} ${strike} PE`}
+                                >
+                                  SELL
+                                </button>
+                              </>
+                            )}
                             <button
                               onClick={() => onSelectContract({ strike, option_type: 'PE' })}
                               className="p-1 rounded text-cyan-400 hover:bg-cyan-950/80 hover:text-cyan-200 transition-colors"
@@ -633,6 +725,56 @@ export default function OptionChain({
           </tbody>
         </table>
       </div>
+
+      {/* Floating Strategy Basket Dock */}
+      {basketLegs.length > 0 && (
+        <div className="p-2.5 bg-[#0b101d] border-t border-purple-800/60 flex flex-wrap items-center justify-between gap-2 shadow-2xl animate-fadeIn">
+          <div className="flex items-center gap-2">
+            <span className="px-2 py-0.5 rounded bg-purple-600 text-white text-[11px] font-bold font-mono flex items-center gap-1">
+              <ShoppingBag size={11} />
+              Basket ({basketLegs.length})
+            </span>
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              {basketLegs.map((leg, i) => (
+                <span
+                  key={i}
+                  className={`px-2 py-0.5 rounded font-mono font-bold flex items-center gap-1 border ${
+                    leg.side === 'BUY'
+                      ? 'bg-emerald-950/80 border-emerald-700 text-emerald-300'
+                      : 'bg-rose-950/80 border-rose-700 text-rose-300'
+                  }`}
+                >
+                  {leg.side} {leg.strike} {leg.option_type} @ ₹{leg.price}
+                  <button
+                    onClick={() => removeBasketLeg(i)}
+                    className="text-slate-400 hover:text-white ml-0.5 text-xs"
+                    title="Remove leg"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={clearBasket}
+              className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-semibold"
+            >
+              Clear
+            </button>
+            <button
+              onClick={handleExecuteBasket}
+              disabled={executingBasket}
+              className="px-3 py-1 rounded bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-950/50 flex items-center gap-1.5 active:scale-95 transition-all"
+            >
+              <Zap size={13} />
+              <span>{executingBasket ? 'Placing Orders...' : `Execute All (${basketLegs.length} Legs)`}</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Footer Info Ribbon */}
       <div className="px-3 py-1.5 bg-[#080c14] border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400">

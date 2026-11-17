@@ -508,6 +508,26 @@ export default function App() {
                 spotPrice={spotPrice}
                 onOpenOrder={handleOpenOrder}
                 onSelectContract={(contract) => setSelectedContract(contract)}
+                onExecuteBasket={async (legs) => {
+                  try {
+                    for (const leg of legs) {
+                      await handlePlaceOrder({
+                        symbol: `${selectedIndex}${leg.strike}${leg.option_type}`,
+                        underlying: selectedIndex,
+                        strike: Number(leg.strike),
+                        option_type: leg.option_type,
+                        side: leg.side,
+                        order_type: 'MARKET',
+                        lots: Number(leg.lots || 1),
+                        current_ltp: Number(leg.price || 100),
+                        price: Number(leg.price || 100),
+                      });
+                    }
+                    showToast(`Basket executed successfully (${legs.length} legs)!`, 'success');
+                  } catch (e) {
+                    showToast(`Basket execution failed: ${e.message}`, 'error');
+                  }
+                }}
               />
             </div>
 
