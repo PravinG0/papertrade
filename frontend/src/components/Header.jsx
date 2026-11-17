@@ -14,8 +14,14 @@ import {
   Keyboard,
   Volume2,
   VolumeX,
+  User,
+  LogIn,
+  LogOut,
+  ChevronDown,
+  Brain,
 } from 'lucide-react';
 import sound from '../utils/audio';
+import { useAuth } from '../context/AuthContext';
 
 export default function Header({
   indices = {},
@@ -27,7 +33,10 @@ export default function Header({
   onOpenReplay = () => {},
   onOpenCalculator = () => {},
   onOpenShortcuts = () => {},
+  onOpenAuth = () => {},
 }) {
+  const { user, isAuthenticated, logout } = useAuth();
+  const [showUserDropdown, setShowUserDropdown] = useState(false);
   const [isMuted, setIsMuted] = useState(sound.isMuted());
   const toggleSound = () => setIsMuted(sound.toggleMute());
   const isReplay = replayState?.is_active || false;
@@ -183,6 +192,57 @@ export default function Header({
             <RotateCcw size={13} className="text-amber-400" />
             <span className="hidden sm:inline">Reset</span>
           </button>
+
+          {/* User Auth Profile / Sign In */}
+          {isAuthenticated && user ? (
+            <div className="relative">
+              <button
+                onClick={() => setShowUserDropdown(!showUserDropdown)}
+                className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-700/80 hover:border-cyan-500/50 text-xs transition-all shadow-inner"
+                title={`Logged in as ${user.username}`}
+              >
+                <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-cyan-600 to-blue-600 text-white font-bold flex items-center justify-center text-[10px] shadow-sm">
+                  {user.username ? user.username[0].toUpperCase() : 'U'}
+                </div>
+                <span className="font-semibold text-slate-200 tracking-wide max-w-[90px] truncate hidden sm:inline">
+                  {user.username}
+                </span>
+                <ChevronDown size={13} className="text-slate-400" />
+              </button>
+
+              {showUserDropdown && (
+                <div
+                  className="absolute right-0 mt-2 w-48 bg-[#0b0f19] border border-slate-800 rounded-xl shadow-2xl shadow-black/80 py-1.5 z-50 text-xs"
+                  onClick={() => setShowUserDropdown(false)}
+                >
+                  <div className="px-3 py-2 border-b border-slate-800">
+                    <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Signed in as</p>
+                    <p className="font-semibold text-white truncate">{user.username}</p>
+                    <p className="text-[10px] text-cyan-400 truncate">{user.email}</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      logout();
+                      setShowUserDropdown(false);
+                    }}
+                    className="w-full text-left px-3 py-2 text-rose-400 hover:bg-slate-900 flex items-center gap-2 transition-colors font-medium"
+                  >
+                    <LogOut size={13} />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={() => onOpenAuth('login')}
+              className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white transition-all shadow-md shadow-cyan-950/60 flex items-center gap-1.5 text-xs font-bold tracking-wide"
+              title="Sign in or register to persist trading journal"
+            >
+              <LogIn size={13} />
+              <span>Sign In</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -235,6 +295,21 @@ export default function Header({
           >
             <Layers size={14} />
             <span>Strategy Payoff</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('debate')}
+            className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all ${
+              activeTab === 'debate'
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-900/40'
+                : 'text-purple-400 hover:text-purple-200 hover:bg-purple-950/40'
+            }`}
+          >
+            <Brain size={14} className={activeTab === 'debate' ? 'text-white' : 'text-purple-400'} />
+            <span className="font-bold">AI Debate Studio</span>
+            <span className="text-[9px] font-mono font-bold px-1 py-0.2 rounded bg-purple-900/80 text-purple-200">
+              3-Agent
+            </span>
           </button>
         </div>
 

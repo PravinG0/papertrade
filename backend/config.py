@@ -60,7 +60,7 @@ class Settings(BaseSettings):
 
     # ── Gemini AI Configuration ──────────────────────────────────────────
     GEMINI_API_KEY: str = Field(default="")
-    GEMINI_MODEL: str = Field(default="gemini-3.5-flash-lite")
+    GEMINI_MODEL: str = Field(default="gemini-3.8-flash")
 
     # ── Scrip Master Cache Path ───────────────────────────────────────────
     SCRIP_CACHE_PATH: str = Field(

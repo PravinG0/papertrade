@@ -24,6 +24,7 @@ from angel_service import angel_service
 from auth import auth_router, get_current_user, get_optional_user
 from config import INDEX_CONFIG, normalize_index_symbol, settings
 from database import UserModel, init_db
+from debate_engine import debate_engine
 from greeks import BlackScholesEngine
 from paper_engine import paper_engine
 from replay_engine import replay_engine
@@ -157,6 +158,19 @@ class PayoffRequest(BaseModel):
     symbol: str = "NIFTY"
     spot: Optional[float] = None
     legs: list[StrategyLeg]
+
+
+class DebateRunRequest(BaseModel):
+    symbol: str = Field(default="NIFTY", description="Index symbol: NIFTY or BANKNIFTY")
+
+
+class DebateExecuteRequest(BaseModel):
+    lots: int = Field(default=1, ge=1, description="Number of lots to execute")
+    strike: Optional[float] = None
+    option_type: Optional[str] = None
+    price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    target: Optional[float] = None
 
 
 # ── System & Status Endpoints ────────────────────────────────────────────────
@@ -566,6 +580,64 @@ async def calculate_payoff_endpoint(req: PayoffRequest):
         spot = quote.get("ltp", 25400.0)
     legs_dicts = [leg.model_dump() for leg in req.legs]
     return calculate_strategy_payoff(spot=spot, legs=legs_dicts)
+
+
+# ── AI Debate Studio Endpoints ───────────────────────────────────────────────
+@app.post("/api/debate/run")
+async def run_debate_endpoint(
+    req: Optional[DebateRunRequest] = None,
+    symbol: Optional[str] = Query(default=None),
+):
+    """Trigger live multi-agent AI debate (Bull vs Bear vs Judge) for NIFTY or BANKNIFTY."""
+    target_symbol = symbol or (req.symbol if req else "NIFTY")
+    try:
+        session = await debate_engine.run_debate(target_symbol)
+        return session
+    except Exception as exc:
+        logger.error("Debate execution failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"AI Debate failed: {str(exc)}")
+
+
+@app.get("/api/debate/latest")
+async def get_latest_debate_endpoint(symbol: Optional[str] = Query(default=None)):
+    """Retrieve the latest completed AI debate session."""
+    session = debate_engine.get_latest_debate(symbol=symbol)
+    if not session:
+        target_symbol = symbol or "NIFTY"
+        try:
+            session = await debate_engine.run_debate(target_symbol)
+        except Exception:
+            return None
+    return session
+
+
+@app.get("/api/debate/history")
+async def get_debate_history_endpoint(limit: int = Query(default=20, ge=1, le=100)):
+    """Retrieve historical AI debate sessions."""
+    return debate_engine.get_debate_history(limit=limit)
+
+
+@app.post("/api/debate/{debate_id}/execute")
+async def execute_debate_verdict_endpoint(
+    debate_id: str,
+    req: Optional[DebateExecuteRequest] = None,
+):
+    """Execute the Judge's recommended trade directly into the Paper Trading portfolio."""
+    try:
+        lots = req.lots if req else 1
+        override = req.model_dump() if req else None
+        result = await debate_engine.execute_verdict(
+            debate_id=debate_id,
+            lots=lots,
+            override_payload=override,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("Failed to execute debate trade: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Trade execution failed: {str(exc)}")
+
 
 
 if __name__ == "__main__":

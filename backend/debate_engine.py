@@ -214,7 +214,9 @@ class DebateEngine:
         atm_strike = float(round(spot / step) * step)
 
         # 2. Candlestick feed (5-minute interval)
-        candles = await angel_service.get_candles(sym, interval="5m", range_period="5d", num_candles=60)
+        candles = await angel_service.get_candles(sym, interval="5m", range_period="5d")
+        if candles and len(candles) > 60:
+            candles = candles[-60:]
         tech = _calc_indicators(candles, spot)
 
         # 3. Option chain feed

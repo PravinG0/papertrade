@@ -11,6 +11,9 @@ import OrderModal from './components/OrderModal';
 import StrategyPayoff from './components/StrategyPayoff';
 import PositionSizeModal from './components/PositionSizeModal';
 import ShortcutsModal from './components/ShortcutsModal';
+import AuthModal from './components/AuthModal';
+import DebateArena from './components/DebateArena';
+import { useAuth } from './context/AuthContext';
 import sound from './utils/audio';
 import {
   getStatus,
@@ -61,6 +64,11 @@ export default function App() {
     progress_percent: 0,
   });
   const [showReplayBar, setShowReplayBar] = useState(false);
+
+  // Auth state & context
+  const { user, token } = useAuth();
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authModalTab, setAuthModalTab] = useState('login');
 
   // Modals state
   const [orderModalData, setOrderModalData] = useState(null);
@@ -148,6 +156,11 @@ export default function App() {
     }
   }, []);
 
+  // Re-sync portfolio & trade history when user logs in or out
+  useEffect(() => {
+    syncTradingState();
+  }, [user, token, syncTradingState]);
+
   // Sync replay state
   const syncReplayState = useCallback(async () => {
     try {
@@ -228,6 +241,23 @@ export default function App() {
       await syncTradingState();
     } catch (err) {
       showToast('Failed to square off all positions', 'error');
+    }
+  };
+
+  // Execute AI Debate Judge Trade Handler
+  const handleExecuteDebateTrade = async (orderPayload) => {
+    try {
+      const res = await handlePlaceOrder(orderPayload);
+      showToast(
+        `Judge trade executed: ${orderPayload.side} ${orderPayload.underlying} ${orderPayload.strike} ${orderPayload.option_type} (1 Lot)`,
+        'success'
+      );
+      await syncTradingState();
+      return res;
+    } catch (err) {
+      const msg = err?.response?.data?.detail || err.message || 'Failed to execute judge trade';
+      showToast(`Judge trade failed: ${msg}`, 'error');
+      throw err;
     }
   };
 
@@ -321,6 +351,10 @@ export default function App() {
         onOpenReplay={() => setShowReplayBar(true)}
         onOpenCalculator={() => setShowCalculator(true)}
         onOpenShortcuts={() => setShowShortcuts(true)}
+        onOpenAuth={(tab = 'login') => {
+          setAuthModalTab(tab);
+          setShowAuthModal(true);
+        }}
       />
 
       {/* Replay Docked Bar (when enabled) */}
@@ -451,6 +485,17 @@ export default function App() {
             />
           </div>
         )}
+
+        {/* Tab 5: AI Debate Studio */}
+        {activeTab === 'debate' && (
+          <div className="max-w-7xl mx-auto">
+            <DebateArena
+              selectedIndex={selectedIndex}
+              onSelectIndex={(idx) => setSelectedIndex(idx)}
+              onExecuteTrade={handleExecuteDebateTrade}
+            />
+          </div>
+        )}
       </main>
 
       {/* Instant 1-Click Order Modal */}
@@ -489,6 +534,17 @@ export default function App() {
       {showShortcuts && (
         <ShortcutsModal onClose={() => setShowShortcuts(false)} />
       )}
+
+      {/* Authentication Modal (Sign In / Register) */}
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        initialTab={authModalTab}
+        onAuthSuccess={(msg) => {
+          showToast(msg, 'success');
+          syncTradingState();
+        }}
+      />
     </div>
   );
 }

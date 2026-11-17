@@ -12,6 +12,7 @@ Outputs:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Optional
@@ -87,24 +88,25 @@ class JudgeAgent:
 
         models_to_try = [
             settings.GEMINI_MODEL,
-            "gemini-3.5-flash-lite",
             "gemini-3.8-flash",
-            "gemini-3.1-flash-lite",
-            "gemini-2.5-flash",
         ]
         models_to_try = list(dict.fromkeys([m for m in models_to_try if m]))
 
         if self._client:
             for model_name in models_to_try:
                 try:
-                    response = self._client.models.generate_content(
-                        model=model_name,
-                        contents=user_prompt,
-                        config=genai_types.GenerateContentConfig(
-                            system_instruction=_JUDGE_SYSTEM_PROMPT,
-                            response_mime_type="application/json",
-                            temperature=0.2,
+                    response = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            self._client.models.generate_content,
+                            model=model_name,
+                            contents=user_prompt,
+                            config=genai_types.GenerateContentConfig(
+                                system_instruction=_JUDGE_SYSTEM_PROMPT,
+                                response_mime_type="application/json",
+                                temperature=0.2,
+                            ),
                         ),
+                        timeout=8.0,
                     )
                     raw_text = response.text.strip()
                     if raw_text.startswith("```"):

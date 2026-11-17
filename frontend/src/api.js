@@ -112,4 +112,17 @@ export const getPnlCalendar = () =>
 export const getStrategyPayoff = (payload) =>
   api.post('/analytics/payoff', payload);
 
+// AI Debate Studio Endpoints
+export const runDebate = (symbol = 'NIFTY') =>
+  api.post('/debate/run', { symbol });
+
+export const getLatestDebate = (symbol = null) =>
+  api.get('/debate/latest', { params: symbol ? { symbol } : {} });
+
+export const getDebateHistory = (limit = 20) =>
+  api.get('/debate/history', { params: { limit } });
+
+export const executeDebateVerdict = (debateId, payload = {}) =>
+  api.post(`/debate/${debateId}/execute`, payload);
+
 export default api;
