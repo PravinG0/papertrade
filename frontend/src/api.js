@@ -27,14 +27,25 @@ api.interceptors.request.use(
 // Authentication Endpoints
 export const registerUser = (userData) => api.post('/auth/register', userData);
 export const loginUser = (credentials) => api.post('/auth/login', credentials);
+export const googleLogin = (credential) => api.post('/auth/google', { credential });
 export const getMe = () => api.get('/auth/me');
 export const logoutUser = () => api.post('/auth/logout');
+
+export const auth = {
+  register: registerUser,
+  login: loginUser,
+  googleLogin,
+  getMe,
+  logout: logoutUser,
+};
 
 // Attach helpers directly on api object as requested
 api.register = registerUser;
 api.login = loginUser;
+api.googleLogin = googleLogin;
 api.getMe = getMe;
 api.logout = logoutUser;
+api.auth = auth;
 
 // Market Feed Endpoints
 export const getStatus = () => api.get('/status');
@@ -124,5 +135,19 @@ export const getDebateHistory = (limit = 20) =>
 
 export const executeDebateVerdict = (debateId, payload = {}) =>
   api.post(`/debate/${debateId}/execute`, payload);
+
+// Auto-Debate Scheduler Endpoints
+export const startScheduler = (payload = {}) =>
+  api.post('/scheduler/start', payload);
+
+export const stopScheduler = () =>
+  api.post('/scheduler/stop');
+
+export const getSchedulerStatus = () =>
+  api.get('/scheduler/status');
+
+api.startScheduler = startScheduler;
+api.stopScheduler = stopScheduler;
+api.getSchedulerStatus = getSchedulerStatus;
 
 export default api;

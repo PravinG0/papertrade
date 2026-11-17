@@ -51,17 +51,24 @@ export function AuthProvider({ children }) {
     };
   }, [token]);
 
-  const login = useCallback(async (credentials) => {
+  const login = useCallback(async (credentialsOrSession) => {
     setError(null);
     try {
-      const res = await loginUser(credentials);
-      const { access_token, user: userData } = res.data;
+      let data;
+      // Handle either raw credentials or pre-resolved session payload (e.g. Google OAuth)
+      if (credentialsOrSession?.access_token && credentialsOrSession?.user) {
+        data = credentialsOrSession;
+      } else {
+        const res = await loginUser(credentialsOrSession);
+        data = res.data;
+      }
+      const { access_token, user: userData } = data;
       try {
         localStorage.setItem('token', access_token);
       } catch {}
       setToken(access_token);
       setUser(userData);
-      return res.data;
+      return data;
     } catch (err) {
       const message = err.response?.data?.detail || err.message || 'Login failed';
       setError(message);

@@ -28,6 +28,7 @@ from debate_engine import debate_engine
 from greeks import BlackScholesEngine
 from paper_engine import paper_engine
 from replay_engine import replay_engine
+from scheduler import get_scheduler
 
 logger = logging.getLogger("tradelab_main")
 logging.basicConfig(level=logging.INFO)
@@ -90,6 +91,10 @@ async def lifespan(app: FastAPI):
     yield
     if _mtm_task and not _mtm_task.done():
         _mtm_task.cancel()
+    try:
+        await get_scheduler().stop()
+    except Exception as exc:
+        logger.warning("Error stopping scheduler on shutdown: %s", exc)
     await angel_service.close()
     await replay_engine.stop_replay()
     logger.info("TradeLab Backend shutdown complete.")
@@ -171,6 +176,12 @@ class DebateExecuteRequest(BaseModel):
     price: Optional[float] = None
     stop_loss: Optional[float] = None
     target: Optional[float] = None
+
+
+class SchedulerStartRequest(BaseModel):
+    interval_minutes: int = Field(default=5, description="Interval in minutes: 3, 5, 10, or 15")
+    symbol: str = Field(default="NIFTY", description="Underlying index: NIFTY or BANKNIFTY")
+    auto_execute: bool = Field(default=False, description="Auto-execute Judge trades if confidence >= 70%")
 
 
 # ── System & Status Endpoints ────────────────────────────────────────────────
@@ -638,6 +649,34 @@ async def execute_debate_verdict_endpoint(
     except Exception as exc:
         logger.error("Failed to execute debate trade: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Trade execution failed: {str(exc)}")
+
+
+# ── Auto-Debate Scheduler Endpoints ──────────────────────────────────────────
+@app.post("/api/scheduler/start")
+async def start_scheduler_endpoint(req: SchedulerStartRequest):
+    """Start automated periodic background debating."""
+    scheduler = get_scheduler()
+    status = await scheduler.start(
+        interval_minutes=req.interval_minutes,
+        symbol=req.symbol,
+        auto_execute=req.auto_execute,
+    )
+    return {"status": "started", "scheduler": status}
+
+
+@app.post("/api/scheduler/stop")
+async def stop_scheduler_endpoint():
+    """Stop automated periodic background debating."""
+    scheduler = get_scheduler()
+    status = await scheduler.stop()
+    return {"status": "stopped", "scheduler": status}
+
+
+@app.get("/api/scheduler/status")
+async def get_scheduler_status_endpoint():
+    """Get current scheduler operational status."""
+    scheduler = get_scheduler()
+    return scheduler.get_status()
 
 
 

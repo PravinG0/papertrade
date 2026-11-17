@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Brain,
   TrendingUp,
@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
+  Timer,
   Layers,
   History,
   Activity,
@@ -22,7 +23,15 @@ import {
   ShoppingCart,
   Percent,
 } from 'lucide-react';
-import { runDebate, getLatestDebate, getDebateHistory, executeDebateVerdict } from '../api';
+import {
+  runDebate,
+  getLatestDebate,
+  getDebateHistory,
+  executeDebateVerdict,
+  startScheduler,
+  stopScheduler,
+  getSchedulerStatus,
+} from '../api';
 
 function ConvictionTugOfWar({ bullScore = 0, bearScore = 0 }) {
   const bull = Number(bullScore) || 0;

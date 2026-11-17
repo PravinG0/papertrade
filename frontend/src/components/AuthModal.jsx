@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   LogIn,
@@ -11,6 +11,9 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { auth } from '../api';
+
+const GOOGLE_CLIENT_ID = '518222337987-4gkeuho6suld8hbtml9hk4jopofurn35.apps.googleusercontent.com';
 
 export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAuthSuccess = () => {} }) {
   const { login, register } = useAuth();

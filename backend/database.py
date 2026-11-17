@@ -124,6 +124,8 @@ class UserModel(Base):
     username: str = Column(String(64), unique=True, index=True, nullable=False)
     email: str = Column(String(255), unique=True, index=True, nullable=False)
     hashed_password: str = Column(String(255), nullable=False)
+    google_id: str | None = Column(String(128), unique=True, index=True, nullable=True)
+    avatar_url: str | None = Column(String(512), nullable=True)
     created_at: datetime = Column(DateTime(timezone=True), default=ist_now, nullable=False)
 
     # Relationships
@@ -132,6 +134,22 @@ class UserModel(Base):
 
     def __repr__(self) -> str:
         return f"<User id={self.id} username={self.username} email={self.email}>"
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert UserModel to client-compatible dictionary format."""
+        created_at_str = (
+            self.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            if hasattr(self.created_at, "strftime")
+            else str(self.created_at)
+        )
+        return {
+            "id": self.id,
+            "username": self.username,
+            "email": self.email,
+            "google_id": self.google_id,
+            "avatar_url": self.avatar_url,
+            "created_at": created_at_str,
+        }
 
 
 class PaperTradeModel(Base):
@@ -251,6 +269,21 @@ async def init_db() -> None:
     """Create all database tables if they do not exist."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # SQLite schema migration for newly added columns
+        def _check_sqlite_columns(connection):
+            try:
+                res = connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()
+                col_names = [col[1] for col in res]
+                if "google_id" not in col_names:
+                    connection.exec_driver_sql("ALTER TABLE users ADD COLUMN google_id VARCHAR(128)")
+                    connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_id ON users (google_id)")
+                if "avatar_url" not in col_names:
+                    connection.exec_driver_sql("ALTER TABLE users ADD COLUMN avatar_url VARCHAR(512)")
+            except Exception as e:
+                logger.warning("Notice on SQLite table migration: %s", e)
+
+        await conn.run_sync(_check_sqlite_columns)
     logger.info("Database initialized successfully at %s", DATABASE_URL_NORMALIZED)
 
 

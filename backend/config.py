@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = Field(default="HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60 * 24 * 7)
 
+    # ── Google OAuth Configuration ───────────────────────────────────────
+    GOOGLE_CLIENT_ID: str = Field(
+        default="518222337987-4gkeuho6suld8hbtml9hk4jopofurn35.apps.googleusercontent.com"
+    )
+    GOOGLE_CLIENT_SECRET: str = Field(default="")
+
     # ── Gemini AI Configuration ──────────────────────────────────────────
     GEMINI_API_KEY: str = Field(default="")
     GEMINI_MODEL: str = Field(default="gemini-3.8-flash")

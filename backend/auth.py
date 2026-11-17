@@ -16,10 +16,12 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+import httpx
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -42,6 +44,15 @@ JWT_SECRET_KEY = getattr(
 )
 JWT_ALGORITHM = getattr(settings, "JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = getattr(settings, "ACCESS_TOKEN_EXPIRE_MINUTES", 60 * 24 * 7)
+
+GOOGLE_CLIENT_ID = getattr(
+    settings,
+    "GOOGLE_CLIENT_ID",
+    os.getenv(
+        "GOOGLE_CLIENT_ID",
+        "518222337987-4gkeuho6suld8hbtml9hk4jopofurn35.apps.googleusercontent.com",
+    ),
+)
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -149,10 +160,15 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class GoogleLoginRequest(BaseModel):
+    credential: str
+
+
 class UserResponse(BaseModel):
     id: int
     email: str
     username: str
+    avatar_url: Optional[str] = None
     created_at: str
 
     model_config = ConfigDict(from_attributes=True)
@@ -299,6 +315,7 @@ async def register(req: RegisterRequest, session: AsyncSession = Depends(get_ses
             id=new_user.id,
             email=new_user.email,
             username=new_user.username,
+            avatar_url=new_user.avatar_url,
             created_at=created_at_str,
         ),
     )
@@ -347,6 +364,7 @@ async def login(req: LoginRequest, session: AsyncSession = Depends(get_session))
             id=user.id,
             email=user.email,
             username=user.username,
+            avatar_url=user.avatar_url,
             created_at=created_at_str,
         ),
     )
@@ -360,6 +378,7 @@ async def get_me(current_user: UserModel = Depends(get_current_user)):
         id=current_user.id,
         email=current_user.email,
         username=current_user.username,
+        avatar_url=current_user.avatar_url,
         created_at=created_at_str,
     )
 
@@ -368,3 +387,165 @@ async def get_me(current_user: UserModel = Depends(get_current_user)):
 async def logout(current_user: Optional[UserModel] = Depends(get_optional_user)):
     """Logout endpoint acknowledging client token disposal."""
     return {"status": "success", "message": "Logged out successfully."}
+
+
+@auth_router.post("/google")
+async def google_auth(req: GoogleLoginRequest, session: AsyncSession = Depends(get_session)):
+    """Authenticate or register user with Google OAuth ID token."""
+    credential = req.credential.strip()
+    if not credential:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing Google credential token.",
+        )
+
+    # Verify the token with Google using tokeninfo endpoint
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            resp = await client.get(
+                f"https://oauth2.googleapis.com/tokeninfo?id_token={credential}"
+            )
+        except Exception as exc:
+            logger.error("Failed to reach Google tokeninfo endpoint: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unable to verify token with Google.",
+            )
+
+    if resp.status_code != 200:
+        logger.warning("Google token verification failed with status %s: %s", resp.status_code, resp.text)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Google credential token.",
+        )
+
+    token_data = resp.json()
+
+    # Check: aud equals GOOGLE_CLIENT_ID
+    aud = token_data.get("aud")
+    if aud != GOOGLE_CLIENT_ID:
+        logger.warning("Audience mismatch: expected %s, got %s", GOOGLE_CLIENT_ID, aud)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Google token audience mismatch.",
+        )
+
+    # Check: email_verified is true or "true"
+    email_verified = token_data.get("email_verified")
+    if not (email_verified is True or str(email_verified).lower() == "true"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google account email is not verified.",
+        )
+
+    # Extract email, name, sub (Google user ID), picture
+    email = token_data.get("email", "").strip().lower()
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google ID token does not contain a valid email address.",
+        )
+
+    name = token_data.get("name", "").strip()
+    sub = token_data.get("sub", "").strip()
+    picture = token_data.get("picture", "").strip() or None
+
+    # Query DB: find user by google_id == sub or email == email
+    stmt = select(UserModel).where(
+        (UserModel.google_id == sub) | (UserModel.email == email)
+    )
+    user = (await session.execute(stmt)).scalars().first()
+
+    if user:
+        # If user exists: update google_id and avatar_url if missing
+        updated = False
+        if not user.google_id:
+            user.google_id = sub
+            updated = True
+        if picture and not user.avatar_url:
+            user.avatar_url = picture
+            updated = True
+        elif picture and user.avatar_url != picture:
+            user.avatar_url = picture
+            updated = True
+        if updated:
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+    else:
+        # If user doesn't exist: create new UserModel with random secure password hash,
+        # google_id, email, username (derived from email or name), and avatar_url.
+        base_username = ""
+        if name:
+            base_username = re.sub(r"[^a-zA-Z0-9_]", "", name.lower().replace(" ", "_"))
+        if not base_username:
+            base_username = re.sub(r"[^a-zA-Z0-9_]", "", email.split("@")[0])
+        if len(base_username) < 3:
+            base_username = f"trader_{base_username}"
+        base_username = base_username[:40]
+
+        candidate_username = base_username
+        suffix = 1
+        while True:
+            existing_u = (
+                await session.execute(
+                    select(UserModel).where(UserModel.username == candidate_username)
+                )
+            ).scalars().first()
+            if not existing_u:
+                break
+            candidate_username = f"{base_username}_{suffix}"
+            suffix += 1
+
+        random_password = secrets.token_urlsafe(32)
+        user = UserModel(
+            username=candidate_username,
+            email=email,
+            hashed_password=hash_password(random_password),
+            google_id=sub,
+            avatar_url=picture,
+        )
+        session.add(user)
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            stmt = select(UserModel).where(
+                (UserModel.google_id == sub) | (UserModel.email == email)
+            )
+            user = (await session.execute(stmt)).scalars().first()
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to register user account.",
+                )
+
+    # Ensure PortfolioModel exists for user with ₹10,00,000 initial capital
+    port_stmt = select(PortfolioModel).where(PortfolioModel.user_id == user.id)
+    port = (await session.execute(port_stmt)).scalars().first()
+    if not port:
+        initial_cap = getattr(settings, "VIRTUAL_STARTING_CAPITAL", 1000000.0)
+        user_portfolio = PortfolioModel(
+            user_id=user.id,
+            initial_capital=initial_cap,
+            cash_balance=initial_cap,
+            margin_used=0.0,
+            updated_at=ist_now_str(),
+        )
+        session.add(user_portfolio)
+        await session.commit()
+    else:
+        await session.commit()
+
+    await session.refresh(user)
+
+    # Issue JWT access token (create_access_token) and return { "access_token": token, "token_type": "bearer", "user": user.to_dict() }
+    token = create_access_token(
+        data={"sub": str(user.id), "username": user.username, "email": user.email}
+    )
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": user.to_dict(),
+    }
