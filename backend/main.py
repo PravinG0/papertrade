@@ -12,6 +12,7 @@ Serves complete TradeLab API:
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, Optional
@@ -21,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from angel_service import angel_service
-from auth import auth_router, get_current_user, get_optional_user
+from auth import auth_router, decode_access_token, get_current_user, get_optional_user
 from config import INDEX_CONFIG, normalize_index_symbol, settings
 from database import UserModel, init_db
 from debate_engine import debate_engine
@@ -76,8 +77,7 @@ async def _periodic_mtm_loop() -> None:
             spots = await angel_service.get_spot_indices()
 
             # Only update live prices if replay mode is not active and positions exist
-            state = await paper_engine.get_state()
-            if not replay_engine.is_replaying and state["positions"]:
+            if not replay_engine.is_replaying and (paper_engine.active_positions or paper_engine.active_orders):
                 quotes_dict: dict[str, float] = {}
 
                 for s in spots:
@@ -100,15 +100,12 @@ async def _periodic_mtm_loop() -> None:
 
                 await paper_engine.update_market_prices(quotes_dict)
 
-            # Broadcast real-time TICK to all connected WebSockets
+            # Broadcast real-time market price TICK to all connected WebSockets
             if ws_manager.active_connections:
-                fresh_state = await paper_engine.get_state()
                 await ws_manager.broadcast({
                     "type": "TICK",
                     "indices": spots,
-                    "portfolio": fresh_state.get("portfolio"),
-                    "positions": fresh_state.get("positions"),
-                    "timestamp": fresh_state.get("timestamp"),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
         except asyncio.CancelledError:
             break
@@ -225,12 +222,21 @@ class SchedulerStartRequest(BaseModel):
 
 # ── Real-Time WebSocket Terminal Feed ────────────────────────────────────────
 @app.websocket("/ws/terminal")
-async def websocket_terminal_endpoint(websocket: WebSocket):
+async def websocket_terminal_endpoint(websocket: WebSocket, token: Optional[str] = Query(None)):
     """Real-time streaming tick feed for options chain, MTM, and order updates."""
     await ws_manager.connect(websocket)
     try:
+        user_id: Optional[int] = None
+        if token:
+            payload = decode_access_token(token)
+            if payload and "sub" in payload:
+                try:
+                    user_id = int(payload["sub"])
+                except (ValueError, TypeError):
+                    user_id = None
+
         spots = await angel_service.get_spot_indices()
-        state = await paper_engine.get_state()
+        state = await paper_engine.get_state(user_id=user_id)
         replay = replay_engine.get_state()
         await websocket.send_json({
             "type": "INIT",
@@ -399,6 +405,7 @@ async def place_paper_order(order: OrderCreateRequest, current_user: Optional[Us
     if ws_manager.active_connections:
         asyncio.create_task(ws_manager.broadcast({
             "type": "ORDER_UPDATE",
+            "user_id": user_id,
             "trading_state": await paper_engine.get_state(user_id=user_id),
         }))
     return result
@@ -441,6 +448,7 @@ async def exit_paper_position(
     if ws_manager.active_connections:
         asyncio.create_task(ws_manager.broadcast({
             "type": "ORDER_UPDATE",
+            "user_id": user_id,
             "trading_state": await paper_engine.get_state(user_id=user_id),
         }))
     return result
@@ -466,6 +474,7 @@ async def exit_all_paper_positions(current_user: Optional[UserModel] = Depends(g
     if ws_manager.active_connections:
         asyncio.create_task(ws_manager.broadcast({
             "type": "ORDER_UPDATE",
+            "user_id": user_id,
             "trading_state": await paper_engine.get_state(user_id=user_id),
         }))
     return {"status": "SUCCESS", "message": f"Closed {len(results)} positions.", "results": results}
@@ -498,6 +507,7 @@ async def reset_paper_wallet(current_user: Optional[UserModel] = Depends(get_opt
     if ws_manager.active_connections:
         asyncio.create_task(ws_manager.broadcast({
             "type": "ORDER_UPDATE",
+            "user_id": user_id,
             "trading_state": await paper_engine.get_state(user_id=user_id),
         }))
     return res
