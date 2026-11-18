@@ -283,9 +283,16 @@ async def websocket_terminal_endpoint(websocket: WebSocket, token: Optional[str]
 @app.get("/api/ping")
 async def health_check():
     """Lightweight 200 OK endpoint to reset cloud hosting idle timers (Render, Railway)."""
+    db_dialect = engine.dialect.name
+    is_postgres = db_dialect == "postgresql"
     return {
         "status": "ok",
         "service": "TradeLab Paper Trading Engine",
+        "database": {
+            "dialect": db_dialect,
+            "provider": "Supabase PostgreSQL" if is_postgres else "Local SQLite",
+            "is_postgres": is_postgres,
+        },
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "keep_alive": keep_alive_manager.get_status(),
     }
