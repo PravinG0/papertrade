@@ -87,6 +87,12 @@ def normalize_database_url(url: str) -> str:
             rest = f"{userinfo}@{hostinfo}"
             raw_url = f"{proto}://{rest}"
 
+    # Auto-switch Supabase session pooler (port 5432) to transaction pooler (port 6543)
+    # Supabase session mode is strictly limited to 15 clients (EMAXCONNSESSION);
+    # transaction mode on port 6543 supports thousands of concurrent connections.
+    if ".pooler.supabase.com:5432" in raw_url:
+        raw_url = raw_url.replace(".pooler.supabase.com:5432", ".pooler.supabase.com:6543")
+
     if raw_url.startswith("postgres://"):
         return raw_url.replace("postgres://", "postgresql+asyncpg://", 1)
     elif raw_url.startswith("postgresql://"):
@@ -106,10 +112,13 @@ if is_sqlite:
     engine_kwargs["poolclass"] = NullPool
     engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
 else:
-    # PostgreSQL (Supabase / Neon / Render Postgres)
-    engine_kwargs["pool_size"] = 10
-    engine_kwargs["max_overflow"] = 20
-    engine_kwargs["pool_pre_ping"] = True
+    # PostgreSQL (Supabase Transaction Pooler / Neon / Render Postgres)
+    # Using NullPool and disabling statement cache allows limitless connection pooling on port 6543
+    engine_kwargs["poolclass"] = NullPool
+    engine_kwargs["connect_args"] = {
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+    }
 
 engine: AsyncEngine = create_async_engine(DATABASE_URL_NORMALIZED, **engine_kwargs)
 
