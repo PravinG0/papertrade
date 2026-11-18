@@ -57,7 +57,7 @@ def ist_now_str() -> str:
 
 
 def normalize_database_url(url: str) -> str:
-    """Ensure database connection string uses async driver."""
+    """Ensure database connection string uses async driver (aiosqlite or asyncpg)."""
     raw_url = str(url).strip()
     if raw_url.startswith("sqlite:///"):
         # Make sure directory exists for sqlite file
@@ -74,31 +74,44 @@ def normalize_database_url(url: str) -> str:
         except Exception:
             pass
         return raw_url
+    elif raw_url.startswith("postgres://"):
+        return raw_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif raw_url.startswith("postgresql://"):
+        return raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     return raw_url
 
 
 DATABASE_URL_NORMALIZED = normalize_database_url(settings.DATABASE_URL)
+is_sqlite = DATABASE_URL_NORMALIZED.startswith("sqlite")
 
-engine: AsyncEngine = create_async_engine(
-    DATABASE_URL_NORMALIZED,
-    echo=False,
-    future=True,
-    poolclass=NullPool,
-    connect_args={"check_same_thread": False, "timeout": 30},
-)
+engine_kwargs: dict[str, Any] = {
+    "echo": False,
+    "future": True,
+}
 
+if is_sqlite:
+    engine_kwargs["poolclass"] = NullPool
+    engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
+else:
+    # PostgreSQL (Supabase / Neon / Render Postgres)
+    engine_kwargs["pool_size"] = 10
+    engine_kwargs["max_overflow"] = 20
+    engine_kwargs["pool_pre_ping"] = True
 
-@event.listens_for(engine.sync_engine, "connect")
-def _set_sqlite_pragma(dbapi_connection, connection_record):
-    """Enable WAL mode, foreign keys, and busy timeout on SQLite connection."""
-    try:
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=30000")
-        cursor.close()
-    except Exception as exc:
-        logger.warning("Could not set SQLite pragmas: %s", exc)
+engine: AsyncEngine = create_async_engine(DATABASE_URL_NORMALIZED, **engine_kwargs)
+
+if is_sqlite:
+    @event.listens_for(engine.sync_engine, "connect")
+    def _set_sqlite_pragma(dbapi_connection, connection_record):
+        """Enable WAL mode, foreign keys, and busy timeout on SQLite connection."""
+        try:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.close()
+        except Exception as exc:
+            logger.warning("Could not set SQLite pragmas: %s", exc)
 
 
 async_session_factory = async_sessionmaker(
@@ -271,19 +284,20 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
         # SQLite schema migration for newly added columns
-        def _check_sqlite_columns(connection):
-            try:
-                res = connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()
-                col_names = [col[1] for col in res]
-                if "google_id" not in col_names:
-                    connection.exec_driver_sql("ALTER TABLE users ADD COLUMN google_id VARCHAR(128)")
-                    connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_id ON users (google_id)")
-                if "avatar_url" not in col_names:
-                    connection.exec_driver_sql("ALTER TABLE users ADD COLUMN avatar_url VARCHAR(512)")
-            except Exception as e:
-                logger.warning("Notice on SQLite table migration: %s", e)
+        if is_sqlite:
+            def _check_sqlite_columns(connection):
+                try:
+                    res = connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()
+                    col_names = [col[1] for col in res]
+                    if "google_id" not in col_names:
+                        connection.exec_driver_sql("ALTER TABLE users ADD COLUMN google_id VARCHAR(128)")
+                        connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_id ON users (google_id)")
+                    if "avatar_url" not in col_names:
+                        connection.exec_driver_sql("ALTER TABLE users ADD COLUMN avatar_url VARCHAR(512)")
+                except Exception as e:
+                    logger.warning("Notice on SQLite table migration: %s", e)
 
-        await conn.run_sync(_check_sqlite_columns)
+            await conn.run_sync(_check_sqlite_columns)
     logger.info("Database initialized successfully at %s", DATABASE_URL_NORMALIZED)
 
 
