@@ -198,127 +198,138 @@ function ChartPane({
     const container = containerRef.current;
     if (!container) return;
 
-    const chart = createChart(container, {
-      width: container.clientWidth || 400,
-      height: container.clientHeight || 260,
-      layout: {
-        background: { type: ColorType.Solid, color: '#080c14' },
-        textColor: '#94a3b8',
-        fontSize: 10,
-      },
-      grid: {
-        vertLines: { color: 'rgba(30, 41, 59, 0.25)' },
-        horzLines: { color: 'rgba(30, 41, 59, 0.25)' },
-      },
-      crosshair: {
-        mode: CrosshairMode.Normal,
-        vertLine: { color: '#06b6d4', width: 1, style: 3, labelBackgroundColor: '#0891b2' },
-        horzLine: { color: '#06b6d4', width: 1, style: 3, labelBackgroundColor: '#0891b2' },
-      },
-      timeScale: {
-        borderColor: '#1e293b',
-        timeVisible: true,
-        secondsVisible: false,
-      },
-      rightPriceScale: {
-        borderColor: '#1e293b',
-        scaleMargins: { top: 0.1, bottom: 0.25 },
-      },
-    });
+    let chart = null;
+    let ro = null;
+    let animId = null;
 
-    const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#10b981',
-      downColor: '#f43f5e',
-      borderVisible: false,
-      wickUpColor: '#10b981',
-      wickDownColor: '#f43f5e',
-    });
+    animId = requestAnimationFrame(() => {
+      if (!containerRef.current) return;
+      const initialWidth = containerRef.current.clientWidth || 400;
+      const initialHeight = containerRef.current.clientHeight || 260;
 
-    let volumeSeries = null;
-    try {
-      volumeSeries = chart.addSeries(HistogramSeries, {
-        priceFormat: { type: 'volume' },
-        priceScaleId: 'volume',
+      chart = createChart(container, {
+        width: initialWidth,
+        height: initialHeight,
+        layout: {
+          background: { type: ColorType.Solid, color: '#080c14' },
+          textColor: '#94a3b8',
+          fontSize: 10,
+        },
+        grid: {
+          vertLines: { color: 'rgba(30, 41, 59, 0.25)' },
+          horzLines: { color: 'rgba(30, 41, 59, 0.25)' },
+        },
+        crosshair: {
+          mode: CrosshairMode.Normal,
+          vertLine: { color: '#06b6d4', width: 1, style: 3, labelBackgroundColor: '#0891b2' },
+          horzLine: { color: '#06b6d4', width: 1, style: 3, labelBackgroundColor: '#0891b2' },
+        },
+        timeScale: {
+          borderColor: '#1e293b',
+          timeVisible: true,
+          secondsVisible: false,
+        },
+        rightPriceScale: {
+          borderColor: '#1e293b',
+          scaleMargins: { top: 0.1, bottom: 0.25 },
+        },
       });
-      if (chart.priceScale && typeof chart.priceScale === 'function') {
-        try {
-          chart.priceScale('volume')?.applyOptions({
-            scaleMargins: { top: 0.8, bottom: 0.01 },
-          });
-        } catch {
-          volumeSeries.priceScale()?.applyOptions({
-            scaleMargins: { top: 0.8, bottom: 0.01 },
-          });
+
+      const candleSeries = chart.addSeries(CandlestickSeries, {
+        upColor: '#10b981',
+        downColor: '#f43f5e',
+        borderVisible: false,
+        wickUpColor: '#10b981',
+        wickDownColor: '#f43f5e',
+      });
+
+      let volumeSeries = null;
+      try {
+        volumeSeries = chart.addSeries(HistogramSeries, {
+          priceFormat: { type: 'volume' },
+          priceScaleId: 'volume',
+        });
+        if (chart.priceScale && typeof chart.priceScale === 'function') {
+          try {
+            chart.priceScale('volume')?.applyOptions({
+              scaleMargins: { top: 0.8, bottom: 0.01 },
+            });
+          } catch {
+            volumeSeries.priceScale()?.applyOptions({
+              scaleMargins: { top: 0.8, bottom: 0.01 },
+            });
+          }
         }
+      } catch (e) {
+        // safe fallback
       }
-    } catch (e) {
-      // safe fallback
-    }
 
-    const ema20Series = chart.addSeries(LineSeries, {
-      color: '#f59e0b',
-      lineWidth: 1.5,
-      priceLineVisible: false,
-      title: 'EMA 20',
-    });
+      const ema20Series = chart.addSeries(LineSeries, {
+        color: '#f59e0b',
+        lineWidth: 1.5,
+        priceLineVisible: false,
+        title: 'EMA 20',
+      });
 
-    const ema50Series = chart.addSeries(LineSeries, {
-      color: '#06b6d4',
-      lineWidth: 1.5,
-      priceLineVisible: false,
-      title: 'EMA 50',
-    });
+      const ema50Series = chart.addSeries(LineSeries, {
+        color: '#06b6d4',
+        lineWidth: 1.5,
+        priceLineVisible: false,
+        title: 'EMA 50',
+      });
 
-    const vwapSeries = chart.addSeries(LineSeries, {
-      color: '#c084fc',
-      lineWidth: 1.5,
-      priceLineVisible: false,
-      title: 'VWAP',
-    });
+      const vwapSeries = chart.addSeries(LineSeries, {
+        color: '#c084fc',
+        lineWidth: 1.5,
+        priceLineVisible: false,
+        title: 'VWAP',
+      });
 
-    chartRef.current = chart;
-    candleSeriesRef.current = candleSeries;
-    volumeSeriesRef.current = volumeSeries;
-    ema20SeriesRef.current = ema20Series;
-    ema50SeriesRef.current = ema50Series;
-    vwapSeriesRef.current = vwapSeries;
+      chartRef.current = chart;
+      candleSeriesRef.current = candleSeries;
+      volumeSeriesRef.current = volumeSeries;
+      ema20SeriesRef.current = ema20Series;
+      ema50SeriesRef.current = ema50Series;
+      vwapSeriesRef.current = vwapSeries;
 
-    chart.subscribeCrosshairMove((param) => {
-      if (param.time && candleSeriesRef.current) {
-        const data = param.seriesData.get(candleSeriesRef.current);
-        const volData = param.seriesData.get(volumeSeriesRef.current);
-        if (data) {
-          const change = data.close != null && data.open != null ? data.close - data.open : 0;
-          const changePct = data.open && data.open > 0 ? (change / data.open) * 100 : 0;
-          setLegendData({
-            open: data.open,
-            high: data.high,
-            low: data.low,
-            close: data.close,
-            volume: volData?.value || 0,
-            change,
-            changePct,
-          });
+      chart.subscribeCrosshairMove((param) => {
+        if (param.time && candleSeriesRef.current) {
+          const data = param.seriesData.get(candleSeriesRef.current);
+          const volData = param.seriesData.get(volumeSeriesRef.current);
+          if (data) {
+            const change = data.close != null && data.open != null ? data.close - data.open : 0;
+            const changePct = data.open && data.open > 0 ? (change / data.open) * 100 : 0;
+            setLegendData({
+              open: data.open,
+              high: data.high,
+              low: data.low,
+              close: data.close,
+              volume: volData?.value || 0,
+              change,
+              changePct,
+            });
+          }
         }
-      }
-    });
+      });
 
-    // ResizeObserver for flawless container resizing
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
-          chart.applyOptions({
-            width: entry.contentRect.width,
-            height: entry.contentRect.height,
-          });
+      // ResizeObserver for container resizing
+      ro = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+            chart.applyOptions({
+              width: entry.contentRect.width,
+              height: entry.contentRect.height,
+            });
+          }
         }
-      }
+      });
+      ro.observe(container);
     });
-    ro.observe(container);
 
     return () => {
-      ro.disconnect();
-      chart.remove();
+      if (animId) cancelAnimationFrame(animId);
+      if (ro) ro.disconnect();
+      if (chart) chart.remove();
     };
   }, []);
 

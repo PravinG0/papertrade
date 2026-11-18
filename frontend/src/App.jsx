@@ -69,7 +69,11 @@ export default function App() {
   const [showReplayBar, setShowReplayBar] = useState(false);
 
   // Auth state & context
-  const { user, token } = useAuth();
+  const { user, token, loading: authLoading } = useAuth();
+  const userRef = useRef(user);
+  userRef.current = user;
+  const selectedIndexRef = useRef(selectedIndex);
+  selectedIndexRef.current = selectedIndex;
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authModalTab, setAuthModalTab] = useState('login');
 
@@ -205,13 +209,17 @@ export default function App() {
     }
   }, []);
 
-  // Global WebSocket Live Streaming Feed with REST Polling Fallback
+  // Global WebSocket Live Streaming Feed
   useEffect(() => {
+    // Wait until auth verification settles to avoid aborting handshake midway
+    if (authLoading) return;
+
     let ws = null;
     let reconnectTimer = null;
     let isMounted = true;
 
     function connectWs() {
+      if (!isMounted) return;
       const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
       let wsUrl = '';
 
@@ -233,7 +241,7 @@ export default function App() {
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
-          // Connected to streaming feed
+          // Connected cleanly to streaming feed
         };
 
         ws.onmessage = (event) => {
@@ -264,16 +272,18 @@ export default function App() {
                 });
                 if (Object.keys(map).length > 0) {
                   setIndices((prev) => ({ ...prev, ...map }));
-                  if (map[selectedIndex]?.ltp) {
-                    setSpotPrice(map[selectedIndex].ltp);
+                  const currentSymbol = selectedIndexRef.current;
+                  if (map[currentSymbol]?.ltp) {
+                    setSpotPrice(map[currentSymbol].ltp);
                   }
                 }
               }
             } else if (data.type === 'ORDER_UPDATE') {
+              const curUser = userRef.current;
               const matchesUser =
                 data.user_id === undefined ||
-                (user && user.id === data.user_id) ||
-                (!user && !data.user_id);
+                (curUser && curUser.id === data.user_id) ||
+                (!curUser && !data.user_id);
               if (matchesUser) {
                 if (data.trading_state?.portfolio) setPortfolio(data.trading_state.portfolio);
                 if (Array.isArray(data.trading_state?.positions)) setPositions(data.trading_state.positions);
@@ -292,7 +302,7 @@ export default function App() {
         };
 
         ws.onerror = () => {
-          ws?.close();
+          // Allow graceful reconnect via onclose or timer
         };
       } catch (err) {
         if (isMounted) {
@@ -303,7 +313,26 @@ export default function App() {
 
     connectWs();
 
-    // Fallback polling interval (keeps state resilient even if WS drops)
+    return () => {
+      isMounted = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) {
+        // Disarm handlers so aborted connections don't log error in Firefox
+        ws.onerror = null;
+        ws.onclose = null;
+        if (ws.readyState === WebSocket.CONNECTING) {
+          ws.onopen = () => {
+            try { ws.close(1000, 'Normal unmount'); } catch (e) {}
+          };
+        } else if (ws.readyState === WebSocket.OPEN) {
+          try { ws.close(1000, 'Normal unmount'); } catch (e) {}
+        }
+      }
+    };
+  }, [authLoading, token]);
+
+  // Resilient REST fallback polling (independent of WS lifecycle)
+  useEffect(() => {
     syncMarketIndices();
     syncTradingState();
     syncReplayState();
@@ -312,15 +341,10 @@ export default function App() {
       syncMarketIndices();
       syncTradingState();
       syncReplayState();
-    }, 3000);
+    }, 4000);
 
-    return () => {
-      isMounted = false;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (ws) ws.close();
-      clearInterval(interval);
-    };
-  }, [selectedIndex, token, user, syncMarketIndices, syncTradingState, syncReplayState]);
+    return () => clearInterval(interval);
+  }, [syncMarketIndices, syncTradingState, syncReplayState]);
 
   // Order Placement Handler
   const handlePlaceOrder = async (orderPayload) => {
