@@ -297,7 +297,7 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
         # SQLite schema migration for newly added columns
-        if is_sqlite:
+        if engine.dialect.name == "sqlite":
             def _check_sqlite_columns(connection):
                 try:
                     res = connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()
