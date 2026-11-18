@@ -161,7 +161,13 @@ app = FastAPI(
 # ── CORS Middleware ──────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://papertrade-ebon.vercel.app",
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://localhost:8000",
+    ],
+    allow_origin_regex=r"^https://.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -243,12 +249,13 @@ async def websocket_terminal_endpoint(websocket: WebSocket, token: Optional[str]
     try:
         user_id: Optional[int] = None
         if token:
-            payload = decode_access_token(token)
-            if payload and "sub" in payload:
-                try:
+            try:
+                payload = decode_access_token(token)
+                if payload and "sub" in payload:
                     user_id = int(payload["sub"])
-                except (ValueError, TypeError):
-                    user_id = None
+            except Exception as e:
+                logger.debug("WebSocket token decode non-fatal: %s", e)
+                user_id = None
 
         spots = await angel_service.get_spot_indices()
         state = await paper_engine.get_state(user_id=user_id)
