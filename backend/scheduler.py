@@ -33,6 +33,7 @@ class DebateScheduler:
         self.last_run: Optional[str] = None
         self.next_run: Optional[str] = None
         self.run_count: int = 0
+        self._is_debating: bool = False
 
         self._task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
@@ -47,6 +48,7 @@ class DebateScheduler:
             "last_run": self.last_run,
             "next_run": self.next_run,
             "run_count": self.run_count,
+            "is_debating": self._is_debating,
         }
 
     async def start(
@@ -108,6 +110,7 @@ class DebateScheduler:
     async def _run_loop(self) -> None:
         """Periodic background execution loop."""
         logger.info("DebateScheduler loop initiated.")
+        self.is_running = True
         try:
             while self.is_running:
                 sleep_seconds = max(10, self.interval_minutes * 60)
@@ -116,9 +119,17 @@ class DebateScheduler:
                 if not self.is_running:
                     break
 
+                # Advance next_run immediately so UI countdown advances to next interval
+                next_time = datetime.now(IST) + timedelta(minutes=self.interval_minutes)
+                self.next_run = next_time.isoformat()
+                self._is_debating = True
+
                 try:
                     logger.info("DebateScheduler triggering scheduled debate for %s...", self.symbol)
-                    session = await debate_engine.run_debate(symbol=self.symbol)
+                    session = await asyncio.wait_for(
+                        debate_engine.run_debate(symbol=self.symbol),
+                        timeout=90.0,
+                    )
                     self.last_run = datetime.now(IST).isoformat()
                     self.run_count += 1
 
@@ -127,7 +138,6 @@ class DebateScheduler:
                         judge = session.judge
                         verdict = (judge.verdict or "").upper()
                         conf_val = getattr(judge, "confidence", 0)
-                        # Confidence might be 1-10 or 0-100 scale
                         conf_pct = conf_val * 10 if conf_val <= 10 else conf_val
 
                         if conf_pct >= 70 and verdict in ("BUY CE", "BUY PE") and verdict != "NO_TRADE":
@@ -137,7 +147,10 @@ class DebateScheduler:
                                 conf_pct,
                             )
                             try:
-                                await debate_engine.execute_verdict(session.id, lots=1)
+                                await asyncio.wait_for(
+                                    debate_engine.execute_verdict(session.id, lots=1),
+                                    timeout=20.0,
+                                )
                                 logger.info("Auto-execution successful for session %s", session.id)
                             except Exception as exec_err:
                                 logger.warning(
@@ -168,7 +181,7 @@ class DebateScheduler:
                                     "stop_loss": sl_p,
                                     "target": tgt_p,
                                 }
-                                await paper_engine.place_order(order_req)
+                                await asyncio.wait_for(paper_engine.place_order(order_req), timeout=20.0)
                                 session.executed = True
                                 debate_engine._save_history()
 
@@ -176,16 +189,19 @@ class DebateScheduler:
                     raise
                 except Exception as cycle_err:
                     logger.error("Error executing scheduled debate cycle: %s", cycle_err, exc_info=True)
-
-                # Set next scheduled run time
-                next_time = datetime.now(IST) + timedelta(minutes=self.interval_minutes)
-                self.next_run = next_time.isoformat()
+                finally:
+                    self._is_debating = False
+                    # Ensure next_run is strictly set in the future
+                    if not self.next_run or datetime.fromisoformat(self.next_run) <= datetime.now(IST):
+                        self.next_run = (datetime.now(IST) + timedelta(minutes=self.interval_minutes)).isoformat()
 
         except asyncio.CancelledError:
             logger.info("DebateScheduler loop cancelled.")
         except Exception as loop_err:
             logger.error("Unexpected error in DebateScheduler loop: %s", loop_err, exc_info=True)
+        finally:
             self.is_running = False
+            self._is_debating = False
             self.next_run = None
 
 

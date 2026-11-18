@@ -283,10 +283,16 @@ export default function DebateArena({
     const updateTicker = () => {
       const targetMs = new Date(nextRunTime).getTime();
       const nowMs = Date.now();
-      const diffSec = Math.max(0, Math.floor((targetMs - nowMs) / 1000));
+      const diffSec = Math.floor((targetMs - nowMs) / 1000);
 
       if (diffSec <= 0) {
-        setCountdownText('Running...');
+        if (diffSec < -15) {
+          // If past next run time by >15s, refresh scheduler status for the latest timestamp
+          checkSchedulerStatus();
+          setCountdownText('Syncing...');
+        } else {
+          setCountdownText('Running...');
+        }
         return;
       }
 
