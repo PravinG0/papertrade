@@ -57,7 +57,7 @@ def ist_now_str() -> str:
 
 
 def normalize_database_url(url: str) -> str:
-    """Ensure database connection string uses async driver (aiosqlite or asyncpg)."""
+    """Ensure database connection string uses async driver (aiosqlite or asyncpg) and auto-encodes password characters."""
     raw_url = str(url).strip()
     if raw_url.startswith("sqlite:///"):
         # Make sure directory exists for sqlite file
@@ -74,7 +74,20 @@ def normalize_database_url(url: str) -> str:
         except Exception:
             pass
         return raw_url
-    elif raw_url.startswith("postgres://"):
+
+    # Check for unencoded '@' in password (e.g. postgresql://user:pass@word@host:port/db)
+    if "://" in raw_url:
+        proto, rest = raw_url.split("://", 1)
+        if rest.count("@") > 1:
+            userinfo, hostinfo = rest.rsplit("@", 1)
+            if ":" in userinfo:
+                user, password = userinfo.split(":", 1)
+                password = password.replace("@", "%40")
+                userinfo = f"{user}:{password}"
+            rest = f"{userinfo}@{hostinfo}"
+            raw_url = f"{proto}://{rest}"
+
+    if raw_url.startswith("postgres://"):
         return raw_url.replace("postgres://", "postgresql+asyncpg://", 1)
     elif raw_url.startswith("postgresql://"):
         return raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
