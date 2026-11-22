@@ -831,11 +831,14 @@ async def calculate_payoff_endpoint(req: PayoffRequest):
 async def run_debate_endpoint(
     req: Optional[DebateRunRequest] = None,
     symbol: Optional[str] = Query(default=None),
+    current_user: Optional[UserModel] = Depends(get_optional_user),
 ):
     """Trigger live multi-agent AI debate (Bull vs Bear vs Judge) for NIFTY or BANKNIFTY."""
     target_symbol = symbol or (req.symbol if req else "NIFTY")
     try:
-        session = await debate_engine.run_debate(target_symbol)
+        session = await debate_engine.run_debate(
+            target_symbol, user_id=current_user.id if current_user else None
+        )
         return session
     except Exception as exc:
         logger.error("Debate execution failed: %s", exc, exc_info=True)
@@ -843,9 +846,12 @@ async def run_debate_endpoint(
 
 
 @app.get("/api/debate/latest")
-async def get_latest_debate_endpoint(symbol: Optional[str] = Query(default=None)):
-    """Retrieve the latest completed AI debate session (never triggers a new debate)."""
-    return debate_engine.get_latest_debate(symbol=symbol)
+async def get_latest_debate_endpoint(
+    symbol: Optional[str] = Query(default=None),
+    current_user: Optional[UserModel] = Depends(get_optional_user),
+):
+    """The signed-in user's latest debate (never triggers a new debate)."""
+    return debate_engine.get_latest_debate(symbol=symbol, user_id=current_user.id if current_user else None)
 
 
 @app.get("/api/debate/history")
@@ -892,32 +898,36 @@ async def start_scheduler_endpoint(
     current_user: Optional[UserModel] = Depends(get_optional_user),
 ):
     """Start automated periodic background debating (trades go to the caller's paper account)."""
-    scheduler = get_scheduler()
-    status = await scheduler.start(
-        interval_minutes=req.interval_minutes,
-        symbol=req.symbol,
-        auto_execute=req.auto_execute,
-        market_hours_only=req.market_hours_only,
-        lots=req.lots,
-        user_id=current_user.id if current_user else None,
-    )
-    return {"status": "started", "scheduler": status}
+    uid = current_user.id if current_user else None
+    try:
+        status = await get_scheduler().start(
+            interval_minutes=req.interval_minutes,
+            symbol=req.symbol,
+            auto_execute=req.auto_execute,
+            market_hours_only=req.market_hours_only,
+            lots=req.lots,
+            user_id=uid,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"status": "started", "scheduler": get_scheduler().get_status(uid) if status else status}
 
 
 @app.post("/api/scheduler/stop")
-async def stop_scheduler_endpoint():
-    """Stop automated periodic background debating."""
-    scheduler = get_scheduler()
-    status = await scheduler.stop()
-    return {"status": "stopped", "scheduler": status}
+async def stop_scheduler_endpoint(current_user: Optional[UserModel] = Depends(get_optional_user)):
+    """Stop automated periodic background debating (only the account that started it)."""
+    uid = current_user.id if current_user else None
+    try:
+        await get_scheduler().stop(user_id=uid)
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"status": "stopped", "scheduler": get_scheduler().get_status(uid)}
 
 
 @app.get("/api/scheduler/status")
-async def get_scheduler_status_endpoint():
-    """Get current scheduler operational status."""
-    scheduler = get_scheduler()
-    return scheduler.get_status()
-
+async def get_scheduler_status_endpoint(current_user: Optional[UserModel] = Depends(get_optional_user)):
+    """Scheduler status as seen by the caller (another account's schedule is reported as off)."""
+    return get_scheduler().get_status(current_user.id if current_user else None)
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
-from config import normalize_index_symbol
+from config import normalize_index_symbol, settings
 from database import AppKVModel, async_session_factory
 from debate_engine import debate_engine
 from paper_engine import paper_engine
@@ -83,10 +83,12 @@ class DebateScheduler:
         self._lock = asyncio.Lock()
 
     # ── Status ───────────────────────────────────────────────────────────
-    def get_status(self) -> dict:
+    def get_status(self, viewer_id: Optional[int] = None) -> dict:
         now = datetime.now(IST)
+        mine = (not self.is_running) or self.user_id == viewer_id
         return {
-            "is_running": self.is_running,
+            "is_running": self.is_running and mine,
+            "owned_by_other": self.is_running and not mine,
             "interval_minutes": self.interval_minutes,
             "symbol": self.symbol,
             "auto_execute": self.auto_execute,
@@ -161,6 +163,8 @@ class DebateScheduler:
     ) -> dict:
         """Start or restart the auto-debate background loop."""
         async with self._lock:
+            if self.is_running and self.user_id != user_id:
+                raise PermissionError("Auto-debate is already running for another account.")
             await self._cancel_task()
 
             self.interval_minutes = int(interval_minutes) if interval_minutes in (3, 5, 10, 15) else 5
@@ -188,9 +192,11 @@ class DebateScheduler:
         await self._save_state()
         return self.get_status()
 
-    async def stop(self) -> dict:
-        """Stop the background debate scheduler loop."""
+    async def stop(self, user_id: Optional[int] = None) -> dict:
+        """Stop the background debate scheduler loop (owner only)."""
         async with self._lock:
+            if self.is_running and self.user_id != user_id:
+                raise PermissionError("Auto-debate was started by another account.")
             self.is_running = False
             self.next_run = None
             self.status_text = "Standby"
@@ -269,7 +275,7 @@ class DebateScheduler:
         try:
             logger.info("Scheduled debate for %s ...", self.symbol)
             session = await asyncio.wait_for(
-                debate_engine.run_debate(symbol=self.symbol), timeout=DEBATE_TIMEOUT_SECONDS
+                debate_engine.run_debate(symbol=self.symbol, user_id=self.user_id), timeout=DEBATE_TIMEOUT_SECONDS
             )
             self.last_run = datetime.now(IST).isoformat()
             self.last_session_id = session.id
@@ -313,7 +319,7 @@ class DebateScheduler:
             return await skip(f"confidence {conf}/10 below {MIN_CONFIDENCE_PCT // 10}/10")
 
         now = datetime.now(IST)
-        if (now.hour, now.minute) >= NO_NEW_ENTRY_AFTER:
+        if (now.hour, now.minute) >= NO_NEW_ENTRY_AFTER and not settings.ALLOW_OFFHOURS_TRADING:
             return await skip("no new entries after 15:00 IST")
 
         for pos in list(paper_engine.active_positions.values()):

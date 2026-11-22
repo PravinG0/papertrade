@@ -225,7 +225,9 @@ class DebateEngine:
 
     async def get_history_with_outcomes(self, limit: int = 30, user_id: Optional[int] = None) -> list[dict[str, Any]]:
         """Debate history; executed trades carry their live/closed outcome (SL/target/exit P&L)."""
-        sessions = self._history[:limit]
+        if user_id is None:
+            return []  # sign in to keep a personal debate history
+        sessions = [x for x in self._history if x.user_id == user_id][:limit]
         pos_ids = [x.position_id for x in sessions if x.position_id]
         closed: dict[str, PaperTradeModel] = {}
         if pos_ids:
@@ -352,7 +354,7 @@ class DebateEngine:
             global_sentiment=glob,
         )
 
-    async def run_debate(self, symbol: str = "NIFTY") -> DebateSession:
+    async def run_debate(self, symbol: str = "NIFTY", user_id: Optional[int] = None) -> DebateSession:
         """Execute full three-agent debate sequence: Bull -> Bear -> Judge."""
         sym = normalize_index_symbol(symbol)
         logger.info("Starting AI Debate round for %s", sym)
@@ -381,6 +383,7 @@ class DebateEngine:
             judge=judge_output,
             executed=False,
             order_id=None,
+            user_id=user_id,
         )
 
         async with self._lock:
@@ -391,17 +394,22 @@ class DebateEngine:
         logger.info("Debate session #%s generated successfully with verdict: %s", debate_id, judge_output.verdict)
         return session
 
-    def get_latest_debate(self, symbol: Optional[str] = None) -> Optional[DebateSession]:
-        """Return the most recent debate session, optionally filtered by symbol."""
-        if not self._history:
+    def get_latest_debate(
+        self, symbol: Optional[str] = None, user_id: Optional[int] = None
+    ) -> Optional[DebateSession]:
+        """Most recent debate belonging to this account (guests have none), optionally by symbol."""
+        if user_id is None:
+            return None
+        mine = [x for x in self._history if x.user_id == user_id]
+        if not mine:
             return None
         if not symbol:
-            return self._history[0]
+            return mine[0]
         sym = normalize_index_symbol(symbol)
-        for s in self._history:
+        for s in mine:
             if s.symbol == sym:
                 return s
-        return self._history[0]
+        return mine[0]
 
     def get_debate_history(self, limit: int = 30) -> list[DebateSession]:
         """Return chronological list of recent debate sessions."""
@@ -418,13 +426,13 @@ class DebateEngine:
         """Execute the Judge's trade in the PaperEngine at the LIVE Angel One option price."""
         session: Optional[DebateSession] = None
         if debate_id == "latest":
-            session = self.get_latest_debate()
+            session = self.get_latest_debate(user_id=user_id)
         else:
             for x in self._history:
                 if x.id == debate_id:
                     session = x
                     break
-        if not session:
+        if not session or session.user_id != user_id:
             raise ValueError(f"Debate session #{debate_id} not found.")
         if session.executed and not override_payload:
             raise ValueError("This debate verdict was already executed.")

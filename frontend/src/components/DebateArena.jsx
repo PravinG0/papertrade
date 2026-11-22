@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useAuth } from '../context/AuthContext';
 import {
   Brain,
   TrendingUp,
@@ -218,6 +219,7 @@ export default function DebateArena({
   onExecuteTrade = null,
   onTradeChanged = () => {},
 }) {
+  const { isAuthenticated } = useAuth();
   const [currentSymbol, setCurrentSymbol] = useState(selectedIndex || 'NIFTY');
   const [debate, setDebate] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -274,9 +276,10 @@ export default function DebateArena({
   }, []);
 
   useEffect(() => {
+    if (!isAuthenticated) setDebate(null);
     fetchLatest(currentSymbol);
     fetchHistoryList();
-  }, [currentSymbol, fetchLatest, fetchHistoryList]);
+  }, [currentSymbol, fetchLatest, fetchHistoryList, isAuthenticated]);
 
   // Sync scheduler status from backend
   const checkSchedulerStatus = useCallback(async () => {
@@ -765,7 +768,11 @@ export default function DebateArena({
           </div>
 
           {history.length === 0 ? (
-            <p className="text-xs text-slate-500 py-3 text-center">No past debates recorded yet.</p>
+            <p className="text-xs text-slate-500 py-3 text-center">
+              {isAuthenticated
+                ? 'No past debates recorded yet.'
+                : 'Sign in to keep a personal debate history. Debates you run while signed out are not saved.'}
+            </p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-[32rem] overflow-y-auto pr-1">
               {history.map((sess) => {
