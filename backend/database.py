@@ -350,7 +350,7 @@ async def init_db() -> None:
                     logger.warning("Notice on SQLite table migration: %s", e)
 
             await conn.run_sync(_check_sqlite_columns)
-    logger.info("Database initialized successfully at %s", DATABASE_URL_NORMALIZED)
+    logger.info("Database initialized successfully at %s", engine.url.render_as_string(hide_password=True))
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
