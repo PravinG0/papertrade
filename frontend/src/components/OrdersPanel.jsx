@@ -49,7 +49,8 @@ export default function OrdersPanel({
             {orders.length === 0 ? (
               <tr>
                 <td colSpan="9" className="py-10 text-center text-slate-500 font-sans">
-                  No pending limit or trigger orders.
+                  <p className="font-semibold text-slate-300">No pending orders</p>
+                  <p className="text-xs mt-1">Limit and stop orders waiting for their price show up here.</p>
                 </td>
               </tr>
             ) : (

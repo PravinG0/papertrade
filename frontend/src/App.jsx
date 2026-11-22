@@ -14,6 +14,7 @@ import ShortcutsModal from './components/ShortcutsModal';
 import AuthModal from './components/AuthModal';
 import DebateArena from './components/DebateArena';
 import QuickScalperBar from './components/QuickScalperBar';
+import WelcomeGuide from './components/WelcomeGuide';
 import { useAuth } from './context/AuthContext';
 import sound from './utils/audio';
 import {
@@ -29,7 +30,7 @@ import {
   getReplayState,
   getTradeHistory,
 } from './api';
-import { Activity, Clock } from 'lucide-react';
+import { Activity, Clock, Zap, ChevronDown, ChevronUp, CheckCircle2, AlertTriangle, Info } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('terminal'); // 'terminal' | 'oi' | 'pnl'
@@ -67,6 +68,8 @@ export default function App() {
     progress_percent: 0,
   });
   const [showReplayBar, setShowReplayBar] = useState(false);
+  const [showScalper, setShowScalper] = useState(false);
+  const positionsRef = useRef(null);
   const [feedInfo, setFeedInfo] = useState({ source: 'live', marketOpen: true });
 
   // Auth state & context
@@ -83,7 +86,10 @@ export default function App() {
   const [selectedContract, setSelectedContract] = useState(null);
   const [showCalculator, setShowCalculator] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
-  const handleOpenOrder = useCallback((data) => setOrderModalData(data), []);
+  const handleOpenOrder = useCallback(
+    (data) => setOrderModalData({ ...data, marketOpen: feedInfo.marketOpen }),
+    [feedInfo.marketOpen]
+  );
   const handlePriceUpdate = useCallback((p) => {
     if (typeof p === 'number' && !isNaN(p)) {
       setSpotPrice((prev) => (Math.abs(prev - p) > 0.05 ? p : prev));
@@ -372,10 +378,15 @@ export default function App() {
     try {
       const res = await placeOrder(orderPayload);
       sound.playOrderFill();
+      const filled = res?.data;
       showToast(
-        `Order executed: ${orderPayload.side} ${orderPayload.quantity} ${orderPayload.symbol}`,
+        filled?.status === 'PENDING'
+          ? 'Order placed and waiting for its price. See Pending Orders.'
+          : `Bought ${filled?.symbol || orderPayload.symbol} at ₹${filled?.filled_price ?? ''}. See it under Positions.`,
         'success'
       );
+      setRightBottomTab(filled?.status === 'PENDING' ? 'orders' : 'positions');
+      setTimeout(() => positionsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
       await syncTradingState();
       return res;
     } catch (err) {
@@ -505,7 +516,8 @@ export default function App() {
       {/* Toast Notification */}
       {toast && (
         <div
-          className={`fixed top-4 right-4 z-50 px-4 py-2.5 rounded-xl border shadow-2xl text-xs font-semibold flex items-center gap-2 animate-bounce ${
+          role="status"
+          className={`fixed top-4 right-4 left-4 sm:left-auto sm:max-w-sm z-50 px-4 py-3 rounded-xl border shadow-2xl text-xs font-semibold flex items-start gap-2.5 toast-in ${
             toast.type === 'success'
               ? 'bg-emerald-950 border-emerald-600 text-emerald-200'
               : toast.type === 'error'
@@ -513,7 +525,10 @@ export default function App() {
               : 'bg-cyan-950 border-cyan-600 text-cyan-200'
           }`}
         >
-          <span>{toast.message}</span>
+          {toast.type === 'success' ? <CheckCircle2 size={16} className="shrink-0 mt-px" />
+            : toast.type === 'error' ? <AlertTriangle size={16} className="shrink-0 mt-px" />
+            : <Info size={16} className="shrink-0 mt-px" />}
+          <span className="leading-snug">{toast.message}</span>
         </div>
       )}
 
@@ -553,6 +568,9 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 p-3 lg:p-4 max-w-[1920px] w-full mx-auto">
         {/* Tab 1: Terminal (Split Option Chain + Chart + Positions) */}
+        {activeTab === 'terminal' && (
+          <WelcomeGuide marketOpen={feedInfo.marketOpen} onOpenDebate={() => setActiveTab('debate')} />
+        )}
         {activeTab === 'terminal' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 h-auto lg:h-[calc(100vh-135px)] lg:min-h-[660px]">
             {/* Left 7 Columns: Complete Option Chain */}
@@ -606,15 +624,8 @@ export default function App() {
                 />
               </div>
 
-              {/* Middle: 1-Click Scalper Dock */}
-              <QuickScalperBar
-                selectedIndex={selectedIndex}
-                spotPrice={spotPrice}
-                onPlaceOrder={handlePlaceOrder}
-              />
-
               {/* Bottom Half: Tabs for Positions & Orders */}
-              <div className="h-[360px] sm:h-[400px] lg:h-auto lg:flex-1 flex flex-col min-h-[260px] overflow-hidden">
+              <div ref={positionsRef} className="h-[360px] sm:h-[400px] lg:h-auto lg:flex-1 flex flex-col min-h-[260px] overflow-hidden scroll-mt-20">
                 {/* Panel Switcher Tab Header */}
                 <div className="flex items-center gap-1 mb-1.5 bg-slate-900/60 p-1 rounded-lg border border-slate-800 text-xs w-fit">
                   <button
@@ -659,6 +670,25 @@ export default function App() {
                     />
                   )}
                 </div>
+              </div>
+
+              {/* Quick trade dock: hidden until asked for, so Positions stays in view */}
+              <div className="rounded-xl border border-slate-800 bg-slate-900/50">
+                <button
+                  onClick={() => setShowScalper((v) => !v)}
+                  className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-slate-300 hover:text-white"
+                >
+                  <span className="flex items-center gap-2">
+                    <Zap size={13} className="text-amber-400" />
+                    Quick trade (1-tap ATM buy)
+                  </span>
+                  {showScalper ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </button>
+                {showScalper && (
+                  <div className="px-2 pb-2">
+                    <QuickScalperBar selectedIndex={selectedIndex} spotPrice={spotPrice} onPlaceOrder={handlePlaceOrder} />
+                  </div>
+                )}
               </div>
             </div>
           </div>

@@ -84,6 +84,9 @@ class AngelService:
         self._last_live_ok: float = 0.0
         self._oi_baseline: dict[str, tuple[str, float]] = {}
         self.vix: Optional[float] = None
+        # tokens somebody asked for recently: token -> (exchange, last_requested_epoch)
+        self._watch: dict[str, tuple[str, float]] = {}
+        self._refresher: Optional[asyncio.Task] = None
 
     @classmethod
     def get_instance(cls) -> AngelService:
@@ -242,11 +245,59 @@ class AngelService:
                 logger.warning("Quote fetch failed: %s", exc)
                 return {}
 
+    def _ensure_refresher(self) -> None:
+        if not self.is_configured():
+            return
+        if self._refresher is None or self._refresher.done():
+            self._refresher = asyncio.create_task(self._refresh_loop())
+
+    async def _refresh_loop(self) -> None:
+        """Keep recently-requested quotes warm in ONE paced stream.
+
+        Angel allows ~1 quote request/second. Without this, the index poll, option-chain poll,
+        position tracker and every browser tab queued behind that limit (chain calls took 10-15s).
+        Now API calls read the warm cache; this loop is the only steady caller.
+        """
+        idle_since = time.time()
+        while True:
+            try:
+                now = time.time()
+                self._watch = {t: v for t, v in self._watch.items() if now - v[1] < 30.0}
+                if not self._watch:
+                    if now - idle_since > 60.0:
+                        return  # nobody is looking; restarts on the next request
+                    await asyncio.sleep(1.0)
+                    continue
+                idle_since = now
+
+                stalest_first = sorted(
+                    self._watch.items(), key=lambda kv: self._tok_cache.get(kv[0], (0.0, None))[0]
+                )
+                batch = stalest_first[:50]
+                age = now - self._tok_cache.get(batch[0][0], (0.0, None))[0]
+                if age < 1.0:
+                    await asyncio.sleep(0.4)
+                    continue
+                by_exch: dict[str, list[str]] = {}
+                for tok, (exch, _) in batch:
+                    by_exch.setdefault(exch, []).append(tok)
+                got = await self.fetch_quotes(by_exch)
+                if not got:
+                    await asyncio.sleep(2.0)  # API error / rate-limited: back off
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("quote refresher error: %s", exc)
+                await asyncio.sleep(2.0)
+
     async def get_token_quotes(
-        self, items: list[tuple[str, str]], ttl: float = 1.5
+        self, items: list[tuple[str, str]], ttl: float = 4.0
     ) -> dict[str, dict[str, Any]]:
-        """Quotes for [(exchange, token), ...] using a short per-token cache and 50-token chunks."""
+        """Quotes for [(exchange, token), ...]: warm cache first, direct fetch only for misses."""
         now = time.time()
+        for exch, tok in items:
+            self._watch[tok] = (exch, now)
+        self._ensure_refresher()
         result: dict[str, dict[str, Any]] = {}
         missing: dict[str, list[str]] = {}
         for exch, tok in items:
@@ -274,7 +325,7 @@ class AngelService:
 
         quotes_by_sym: dict[str, dict[str, Any]] = {}
         fetched = await self.get_token_quotes(
-            [(e, t) for e, toks in exchange_tokens.items() for t in toks], ttl=1.5
+            [(e, t) for e, toks in exchange_tokens.items() for t in toks], ttl=4.0
         )
         vix_item = fetched.get("99926017")
         if vix_item and float(vix_item.get("ltp") or 0) > 0:
@@ -706,7 +757,7 @@ class AngelService:
         if not pairs:
             return {}
         quotes = await self.get_token_quotes(
-            list({(c.exchange, c.token) for c in pairs.values()}), ttl=1.5
+            list({(c.exchange, c.token) for c in pairs.values()}), ttl=3.0
         )
         out: dict[str, float] = {}
         for sym, c in pairs.items():
@@ -781,7 +832,7 @@ class AngelService:
             return None
 
         quotes = await self.get_token_quotes(
-            [(c.exchange, c.token) for c in contracts.values()], ttl=2.0
+            [(c.exchange, c.token) for c in contracts.values()], ttl=4.0
         )
         if not quotes:
             return None

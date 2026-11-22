@@ -64,3 +64,23 @@ body {
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
 }
+
+
+/* Option chain: Simple view hides the analytics columns; Advanced shows everything */
+table[data-advanced="false"] .adv-col { display: none; }
+table[data-advanced="true"] { min-width: 850px; }
+
+/* Calm toast entrance (replaces the bouncing one) */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.toast-in { animation: toast-in 0.2s ease-out; }
+
+/* Phones: tighter cells so calls | strike | puts fit without sideways scrolling */
+@media (max-width: 639px) {
+  table[data-advanced="false"] th,
+  table[data-advanced="false"] td { padding-left: 0.25rem; padding-right: 0.25rem; }
+  table[data-advanced="false"] td button { padding-left: 0.3rem; padding-right: 0.3rem; font-size: 10px; }
+  table[data-advanced="false"] td { font-size: 11px; }
+}

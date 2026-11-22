@@ -30,6 +30,7 @@ export default function OrderModal({
     lotSize = symbol === 'BANKNIFTY' ? 30 : symbol === 'SENSEX' ? 20 : 65,
     expiry = null,
   } = orderData;
+  const marketOpen = orderData.marketOpen;
 
   const [orderType, setOrderType] = useState('MARKET'); // MARKET | LIMIT | SL
   const [lots, setLots] = useState(1);
@@ -43,6 +44,14 @@ export default function OrderModal({
   const executionPrice = orderType === 'MARKET' ? ltp : (Number(limitPrice) || ltp);
   const estimatedMargin = Math.round(totalQty * executionPrice * 100) / 100;
   const hasSufficientMargin = availableCash >= estimatedMargin;
+
+  const price = Number(executionPrice) || 0;
+  const slNum = Number(stopLossPrice) || 0;
+  const tgtNum = Number(targetPrice) || 0;
+  const isBuy = side === 'BUY';
+  const fmtInr = (n) => `₹${Math.abs(Math.round(n)).toLocaleString('en-IN')}`;
+  const setSlPct = (pct) => setStopLossPrice((Math.round(price * (1 - pct / 100) * 20) / 20).toFixed(2));
+  const setTgtPct = (pct) => setTargetPrice((Math.round(price * (1 + pct / 100) * 20) / 20).toFixed(2));
 
   const handleLotsChange = (delta) => {
     setLots((prev) => Math.max(1, Math.min(50, prev + delta)));
@@ -243,6 +252,42 @@ export default function OrderModal({
               />
             </div>
           </div>
+
+          {/* One-tap presets */}
+          {isBuy && price > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 -mt-1 text-[11px]">
+              <span className="text-slate-500 mr-1">Quick set:</span>
+              {[10, 20, 30].map((p) => (
+                <button type="button" key={`sl${p}`} onClick={() => setSlPct(p)}
+                  className="px-2 py-1 rounded-md bg-rose-950/50 border border-rose-900/60 text-rose-300 hover:bg-rose-900/50 font-semibold">
+                  SL −{p}%
+                </button>
+              ))}
+              {[20, 30, 50].map((p) => (
+                <button type="button" key={`tg${p}`} onClick={() => setTgtPct(p)}
+                  className="px-2 py-1 rounded-md bg-emerald-950/50 border border-emerald-900/60 text-emerald-300 hover:bg-emerald-900/50 font-semibold">
+                  TGT +{p}%
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* What can happen, in plain words */}
+          {isBuy && price > 0 && (
+            <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-xs space-y-1">
+              <p className="text-slate-300 font-semibold">What can happen</p>
+              <p className="text-slate-400">
+                You pay <span className="text-white font-mono">{fmtInr(price * totalQty)}</span> ({totalQty} × ₹{price.toFixed(2)}).
+                {slNum > 0 && slNum < price
+                  ? <> If the stop-loss hits you lose about <span className="text-rose-400 font-mono">{fmtInr((price - slNum) * totalQty)}</span>.</>
+                  : <> With no stop-loss, the most you can lose is the full <span className="text-rose-400 font-mono">{fmtInr(price * totalQty)}</span>.</>}
+                {tgtNum > price && <> If the target hits you make about <span className="text-emerald-400 font-mono">{fmtInr((tgtNum - price) * totalQty)}</span>.</>}
+              </p>
+              {marketOpen === false && (
+                <p className="text-amber-300">Market is closed: new trades open Mon–Fri 09:15–15:15 IST.</p>
+              )}
+            </div>
+          )}
 
           {/* Margin Summary */}
           <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1.5 text-xs">

@@ -105,7 +105,8 @@ export default function PositionsPanel({
             {positions.length === 0 ? (
               <tr>
                 <td colSpan="9" className="py-10 text-center text-slate-500 font-sans">
-                  No active open positions.
+                  <p className="font-semibold text-slate-300">No open positions yet</p>
+                  <p className="text-xs mt-1">Tap BUY on a price in the option chain to open one. It will appear here with live profit/loss.</p>
                 </td>
               </tr>
             ) : (
