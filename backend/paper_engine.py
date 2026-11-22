@@ -11,6 +11,8 @@ Provides:
 
 from __future__ import annotations
 
+import contextlib
+
 import asyncio
 import logging
 import uuid
@@ -144,8 +146,12 @@ class PaperEngine:
             logger.warning("Could not restore active positions from DB: %s", exc)
 
     async def get_state(self, user_id: Optional[int] = None) -> dict[str, Any]:
-        """Return full snapshot of the trading account for specified user or guest."""
-        async with self._lock:
+        """Return full snapshot of the trading account for specified user or guest.
+
+        Read-only: deliberately NOT holding the engine lock while it waits on the database, so
+        slow DB reads (polled every few seconds by the UI) can never starve order placement.
+        """
+        async with contextlib.nullcontext():
             async with async_session_factory() as session:
                 port = await self._get_or_create_portfolio(session, user_id)
                 cash_balance = port.cash_balance

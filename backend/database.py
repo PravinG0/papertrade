@@ -113,8 +113,14 @@ if is_sqlite:
     engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
 else:
     # PostgreSQL (Supabase Transaction Pooler / Neon / Render Postgres)
-    # Using NullPool and disabling statement cache allows limitless connection pooling on port 6543
-    engine_kwargs["poolclass"] = NullPool
+    # A NullPool opened a brand-new TLS connection for EVERY query (seconds each from Render),
+    # which made order placement time out. A tiny pool reuses connections; the transaction
+    # pooler (port 6543) multiplexes server-side so this stays well under its client limit.
+    engine_kwargs["pool_size"] = 3
+    engine_kwargs["max_overflow"] = 2
+    engine_kwargs["pool_pre_ping"] = True
+    engine_kwargs["pool_recycle"] = 240
+    engine_kwargs["pool_timeout"] = 15
     engine_kwargs["connect_args"] = {
         "statement_cache_size": 0,
         "prepared_statement_cache_size": 0,

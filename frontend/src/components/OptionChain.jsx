@@ -117,7 +117,10 @@ export default function OptionChain({
   }, [selectedIndex]);
 
   // Fetch option chain
+  const chainBusy = useRef(false);
   const fetchChain = useCallback(async () => {
+    if (chainBusy.current) return;
+    chainBusy.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -176,6 +179,7 @@ export default function OptionChain({
       }
       setChain(synthetic);
     } finally {
+      chainBusy.current = false;
       setLoading(false);
     }
   }, [selectedIndex, strikeCount, selectedExpiry, strikeStep]);

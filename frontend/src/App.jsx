@@ -179,7 +179,10 @@ export default function App() {
   }, [selectedIndex]);
 
   // Sync portfolio and trading state
+  const tradingSyncBusy = useRef(false);
   const syncTradingState = useCallback(async () => {
+    if (tradingSyncBusy.current) return; // previous poll still in flight - don't pile up
+    tradingSyncBusy.current = true;
     try {
       const res = await getTradingState();
       const data = res.data || {};
@@ -194,6 +197,8 @@ export default function App() {
       }
     } catch (e) {
       // Keep existing state on error
+    } finally {
+      tradingSyncBusy.current = false;
     }
   }, []);
 
