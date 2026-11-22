@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from angel_service import angel_service
 from auth import auth_router, decode_access_token, get_current_user, get_optional_user
 from config import INDEX_CONFIG, normalize_index_symbol, settings
-from database import UserModel, init_db
+from database import UserModel, engine, init_db
 from debate_engine import debate_engine
 from greeks import BlackScholesEngine
 from keep_alive import keep_alive_manager
