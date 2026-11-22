@@ -135,7 +135,9 @@ function ChartPane({
       let prevTime = -1;
 
       for (const c of sorted) {
-        const t = typeof c.time === 'number' ? c.time : Math.floor(new Date(c.time || c.timestamp || c.date).getTime() / 1000);
+        const rawT = typeof c.time === 'number' ? c.time : Math.floor(new Date(c.time || c.timestamp || c.date).getTime() / 1000);
+        // lightweight-charts renders UTC; shift +5:30 so the axis shows IST (09:15 open, 15:30 close)
+        const t = rawT + 19800;
         if (t > prevTime && !isNaN(c.open) && !isNaN(c.close)) {
           const o = Number(c.open);
           const cl = Number(c.close);

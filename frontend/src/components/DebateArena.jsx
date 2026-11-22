@@ -169,10 +169,54 @@ function MarketMatrixBar({ snapshot }) {
   );
 }
 
+/** Shows what happened to a debate's trade: skipped, open, target hit, stop-loss hit ... */
+function OutcomeBadge({ sess }) {
+  const o = sess.outcome;
+  if (!sess.executed) {
+    return sess.skip_reason ? (
+      <span className="text-[10px] text-amber-400 font-medium">⏭ Not traded: {sess.skip_reason}</span>
+    ) : null;
+  }
+  const tag = sess.auto_executed ? 'auto' : 'manual';
+  if (!o) {
+    return <span className="text-[10px] text-cyan-400 font-medium">⚡ Trade executed ({tag})</span>;
+  }
+  const pnl = Number(o.pnl || 0);
+  const isOpen = o.status === 'OPEN' || o.status === 'ACTIVE';
+  const reason = isOpen
+    ? 'OPEN'
+    : o.exit_reason === 'TARGET_HIT'
+    ? '🎯 TARGET HIT'
+    : o.exit_reason === 'STOP_LOSS_HIT'
+    ? '🛑 STOP-LOSS HIT'
+    : (o.exit_reason || 'CLOSED').replace(/_/g, ' ');
+  const fmt = (v) => (v === null || v === undefined ? '-' : Number(v).toFixed(2));
+  return (
+    <div className="mt-1 pt-1.5 border-t border-slate-800 space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] font-bold text-slate-200 truncate">{sess.exec_symbol || 'Trade'}</span>
+        <span className="text-[10px] font-bold text-slate-300">{reason}</span>
+      </div>
+      <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
+        <span>
+          {fmt(o.entry_price)} → {isOpen ? fmt(o.ltp) : fmt(o.exit_price)}
+        </span>
+        <span className={`font-bold ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+          {pnl >= 0 ? '+' : ''}₹{pnl.toFixed(0)}
+        </span>
+      </div>
+      <div className="text-[9px] text-slate-500 font-mono">
+        SL {fmt(o.stop_loss)} · TGT {fmt(o.target)} · {tag}
+      </div>
+    </div>
+  );
+}
+
 export default function DebateArena({
   selectedIndex = 'NIFTY',
   onSelectIndex = () => {},
   onExecuteTrade = null,
+  onTradeChanged = () => {},
 }) {
   const [currentSymbol, setCurrentSymbol] = useState(selectedIndex || 'NIFTY');
   const [debate, setDebate] = useState(null);
@@ -191,7 +235,9 @@ export default function DebateArena({
   const [countdownText, setCountdownText] = useState('');
   const [schedulerLoading, setSchedulerLoading] = useState(false);
 
-  const prevRunCountRef = useRef(0);
+  const lastSessionRef = useRef(undefined);
+  const [marketHoursOnly, setMarketHoursOnly] = useState(true);
+  const [schedulerInfo, setSchedulerInfo] = useState({});
 
   // Sync internal symbol if parent prop changes
   useEffect(() => {
@@ -244,13 +290,21 @@ export default function DebateArena({
         if (s.auto_execute !== undefined) setAutoExecute(Boolean(s.auto_execute));
         setNextRunTime(s.next_run || null);
         setRunCount(s.run_count || 0);
+        if (s.market_hours_only !== undefined) setMarketHoursOnly(Boolean(s.market_hours_only));
+        setSchedulerInfo({
+          status_text: s.status_text,
+          last_error: s.last_error,
+          is_debating: s.is_debating,
+          market_open: s.market_open,
+        });
 
-        // Auto-refresh debate stream and transcripts whenever a scheduled debate completes
-        if (s.run_count > prevRunCountRef.current && prevRunCountRef.current > 0) {
-          fetchLatest(currentSymbol);
+        // Refresh the debate view + history whenever the scheduler produced a NEW session
+        // (also covers the very first run, which the old run-count check skipped)
+        if (lastSessionRef.current !== undefined && s.last_session_id && s.last_session_id !== lastSessionRef.current) {
+          fetchLatest(s.symbol || currentSymbol);
           fetchHistoryList();
         }
-        prevRunCountRef.current = s.run_count || 0;
+        lastSessionRef.current = s.last_session_id || null;
         return s;
       }
     } catch (err) {
@@ -273,6 +327,13 @@ export default function DebateArena({
     return () => clearInterval(pollInterval);
   }, [schedulerRunning, checkSchedulerStatus]);
 
+  // Keep history/outcomes fresh while the scheduler is on or the history panel is open
+  useEffect(() => {
+    if (!schedulerRunning && !showHistory) return;
+    const t = setInterval(fetchHistoryList, 10000);
+    return () => clearInterval(t);
+  }, [schedulerRunning, showHistory, fetchHistoryList]);
+
   // 1-second Countdown Ticker
   useEffect(() => {
     if (!schedulerRunning || !nextRunTime) {
@@ -286,13 +347,8 @@ export default function DebateArena({
       const diffSec = Math.floor((targetMs - nowMs) / 1000);
 
       if (diffSec <= 0) {
-        if (diffSec < -15) {
-          // If past next run time by >15s, refresh scheduler status for the latest timestamp
-          checkSchedulerStatus();
-          setCountdownText('Syncing...');
-        } else {
-          setCountdownText('Running...');
-        }
+        if (diffSec < -15) checkSchedulerStatus();
+        setCountdownText(schedulerInfo.is_debating ? 'Debating...' : 'Starting...');
         return;
       }
 
@@ -304,7 +360,7 @@ export default function DebateArena({
     updateTicker();
     const ticker = setInterval(updateTicker, 1000);
     return () => clearInterval(ticker);
-  }, [schedulerRunning, nextRunTime]);
+  }, [schedulerRunning, nextRunTime, schedulerInfo.is_debating]);
 
   // Toggle Auto-Debate ON/OFF
   const handleToggleScheduler = async () => {
@@ -322,13 +378,14 @@ export default function DebateArena({
           interval_minutes: Number(schedulerInterval),
           symbol: currentSymbol,
           auto_execute: Boolean(autoExecute),
+          market_hours_only: marketHoursOnly,
         });
         if (res.data?.scheduler) {
           const s = res.data.scheduler;
           setSchedulerRunning(true);
           setNextRunTime(s.next_run);
           setRunCount(s.run_count || 0);
-          prevRunCountRef.current = s.run_count || 0;
+          lastSessionRef.current = s.last_session_id || null;
         }
       }
     } catch (err) {
@@ -350,6 +407,7 @@ export default function DebateArena({
           interval_minutes: val,
           symbol: currentSymbol,
           auto_execute: Boolean(autoExecute),
+          market_hours_only: marketHoursOnly,
         });
         if (res.data?.scheduler) {
           setNextRunTime(res.data.scheduler.next_run);
@@ -373,6 +431,7 @@ export default function DebateArena({
           interval_minutes: Number(schedulerInterval),
           symbol: currentSymbol,
           auto_execute: nextVal,
+          market_hours_only: marketHoursOnly,
         });
         if (res.data?.scheduler) {
           setNextRunTime(res.data.scheduler.next_run);
@@ -409,37 +468,17 @@ export default function DebateArena({
     setExecuting(true);
     setErrorMsg(null);
     try {
-      if (onExecuteTrade) {
-        // Use integrated parent executor
-        const judge = debate.judge;
-        const strikeNum = judge.recommended_strike || debate.market_snapshot?.atm_strike || 24500;
-        const isCE = (judge.verdict || '').toUpperCase().includes('CE');
-        const lotSize = currentSymbol === 'BANKNIFTY' ? 15 : 25;
-
-        await onExecuteTrade({
-          symbol: `${currentSymbol}${Math.round(strikeNum)}${isCE ? 'CE' : 'PE'}`,
-          underlying: currentSymbol,
-          strike: Number(strikeNum),
-          option_type: isCE ? 'CE' : 'PE',
-          lots: 1,
-          side: 'BUY',
-          order_type: 'MARKET',
-          price: Number(judge.entry_price || 120),
-          current_ltp: Number(judge.entry_price || 120),
-          stop_loss: Number(judge.stop_loss || 95),
-          target: Number(judge.target || 160),
-        });
-
-        // Mark local debate session as executed
-        setDebate((prev) => (prev ? { ...prev, executed: true } : prev));
+      const res = await executeDebateVerdict(debate.id, { lots: 1 });
+      if (res.data?.status === 'success') {
+        setDebate((prev) =>
+          prev
+            ? { ...prev, executed: true, position_id: res.data.order?.position_id, exec_symbol: res.data.symbol }
+            : prev
+        );
+        onTradeChanged(
+          `Judge trade executed: ${res.data.symbol} @ ${res.data.entry_price} (SL ${res.data.stop_loss} / TGT ${res.data.target})`
+        );
         await fetchHistoryList();
-      } else {
-        // Direct API execution
-        const res = await executeDebateVerdict(debate.id, { lots: 1 });
-        if (res.data?.status === 'success') {
-          setDebate((prev) => (prev ? { ...prev, executed: true } : prev));
-          await fetchHistoryList();
-        }
       }
     } catch (err) {
       const msg = err?.response?.data?.detail || err.message || 'Trade execution failed';
@@ -466,10 +505,9 @@ export default function DebateArena({
         lots: 1,
         side: 'BUY',
         order_type: 'MARKET',
-        price: entryP,
-        current_ltp: entryP,
-        stop_loss: slP,
-        target: tgtP,
+        price: 0,
+        stop_loss_pct: 20,
+        target_pct: 30,
       });
     } catch (err) {
       console.error('Quick trade failed:', err);
@@ -481,7 +519,7 @@ export default function DebateArena({
   const judge = debate?.judge || {};
   const snapshot = debate?.market_snapshot;
   const isBank = currentSymbol === 'BANKNIFTY';
-  const lotSize = isBank ? 15 : 25;
+  const lotSize = isBank ? 30 : currentSymbol === 'SENSEX' ? 20 : 65;
 
   const judgeVerdict = (judge.verdict || 'NO_TRADE').toUpperCase();
   const isBuyCE = judgeVerdict.includes('CE');
@@ -578,6 +616,30 @@ export default function DebateArena({
               </span>
             </label>
 
+            {/* Market-hours-only toggle */}
+            <label className="flex items-center gap-2 cursor-pointer select-none bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-xl px-3 py-1.5 transition-colors">
+              <input
+                type="checkbox"
+                checked={marketHoursOnly}
+                onChange={() => {
+                  const v = !marketHoursOnly;
+                  setMarketHoursOnly(v);
+                  if (schedulerRunning) {
+                    startScheduler({
+                      interval_minutes: Number(schedulerInterval),
+                      symbol: currentSymbol,
+                      auto_execute: Boolean(autoExecute),
+                      market_hours_only: v,
+                    })
+                      .then((r) => r.data?.scheduler && setNextRunTime(r.data.scheduler.next_run))
+                      .catch(() => {});
+                  }
+                }}
+                className="w-3.5 h-3.5 rounded focus:ring-0 focus:ring-offset-0 bg-slate-900 border-slate-700 cursor-pointer accent-cyan-500"
+              />
+              <span className="text-xs text-slate-300 font-medium whitespace-nowrap">Market hours only</span>
+            </label>
+
             {/* Stats Pill */}
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs font-mono">
               <Zap size={13} className="text-purple-400" />
@@ -586,6 +648,21 @@ export default function DebateArena({
             </div>
           </div>
         </div>
+
+        {schedulerRunning && (
+          <div className="mt-3 pt-3 border-t border-slate-800/80 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
+            <span className="text-slate-300">
+              <span className="text-slate-500">Status: </span>
+              {schedulerInfo.status_text || '—'}
+            </span>
+            {!schedulerInfo.market_open && marketHoursOnly && (
+              <span className="text-amber-400">Market closed (09:15–15:30 IST, Mon–Fri) - debates resume at open</span>
+            )}
+            {schedulerInfo.last_error && (
+              <span className="text-rose-400">Last error: {schedulerInfo.last_error}</span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Top Studio Control Bar */}
@@ -690,7 +767,7 @@ export default function DebateArena({
           {history.length === 0 ? (
             <p className="text-xs text-slate-500 py-3 text-center">No past debates recorded yet.</p>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-64 overflow-y-auto pr-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-[32rem] overflow-y-auto pr-1">
               {history.map((sess) => {
                 const isCE = sess.judge?.verdict?.includes('CE');
                 const isPE = sess.judge?.verdict?.includes('PE');
@@ -720,11 +797,9 @@ export default function DebateArena({
                     </div>
                     <div className="flex items-center justify-between text-[11px] text-slate-400">
                       <span>Spot: ₹{sess.spot_price?.toFixed(1)}</span>
-                      <span>{sess.timestamp?.split(' ')[1] || sess.timestamp}</span>
+                      <span>{sess.timestamp}</span>
                     </div>
-                    {sess.executed && (
-                      <span className="text-[10px] text-cyan-400 font-medium">⚡ Trade Executed</span>
-                    )}
+                    <OutcomeBadge sess={sess} />
                   </div>
                 );
               })}

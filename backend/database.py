@@ -298,6 +298,30 @@ class DebateSessionModel(Base):
         return f"<DebateSession id={self.id} symbol={self.symbol} verdict={self.verdict}>"
 
 
+class DebateRecordModel(Base):
+    """Full AI-debate session (JSON payload) so history survives restarts/redeploys."""
+
+    __tablename__ = "debate_records"
+
+    id: str = Column(String(64), primary_key=True)          # deb-<epoch_ms>
+    symbol: str = Column(String(32), nullable=False, default="NIFTY", index=True)
+    user_id: int | None = Column(Integer, nullable=True, index=True)
+    executed: int = Column(Integer, nullable=False, default=0)
+    order_id: str | None = Column(String(64), nullable=True)
+    position_id: str | None = Column(String(64), nullable=True, index=True)
+    created_at: str = Column(String(32), nullable=False, default=ist_now_str, index=True)
+    payload: str = Column(Text, nullable=False)
+
+
+class AppKVModel(Base):
+    """Tiny key/value store (e.g. auto-debate scheduler config so it resumes after restart)."""
+
+    __tablename__ = "app_kv"
+
+    key: str = Column(String(64), primary_key=True)
+    value: str = Column(Text, nullable=False, default="")
+
+
 # ── Database Initialization & Session Dependency ──────────────────────────────
 
 async def init_db() -> None:

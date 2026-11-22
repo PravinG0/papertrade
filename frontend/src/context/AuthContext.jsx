@@ -19,6 +19,7 @@ export function AuthProvider({ children }) {
   // Validate existing token on mount
   useEffect(() => {
     let isMounted = true;
+    let retryTimer = null;
 
     async function loadUser() {
       if (!token) {
@@ -33,12 +34,20 @@ export function AuthProvider({ children }) {
         }
       } catch (err) {
         if (isMounted) {
-          console.warn('Session expired or invalid token:', err);
-          try {
-            localStorage.removeItem('token');
-          } catch {}
-          setToken(null);
-          setUser(null);
+          const status = err?.response?.status;
+          if (status === 401 || status === 403) {
+            // Token genuinely rejected (expired / user deleted) -> sign out
+            console.warn('Session expired or invalid token:', err);
+            try {
+              localStorage.removeItem('token');
+            } catch {}
+            setToken(null);
+            setUser(null);
+          } else {
+            // Server asleep (Render cold start), network blip, 5xx: keep the session and retry
+            console.warn('Could not verify session right now, will retry:', err?.message);
+            retryTimer = setTimeout(loadUser, 4000);
+          }
         }
       } finally {
         if (isMounted) setLoading(false);
@@ -48,6 +57,7 @@ export function AuthProvider({ children }) {
     loadUser();
     return () => {
       isMounted = false;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [token]);
 

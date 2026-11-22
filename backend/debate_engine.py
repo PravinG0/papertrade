@@ -33,6 +33,9 @@ from debate_schemas import (
     ist_now_str,
 )
 from paper_engine import paper_engine
+from database import DebateRecordModel, PaperTradeModel, async_session_factory
+from sqlalchemy import select
+from config import compute_clamped_sl_target
 
 logger = logging.getLogger("debate_engine")
 IST = ZoneInfo("Asia/Kolkata")
@@ -169,7 +172,6 @@ class DebateEngine:
         self.judge_agent = JudgeAgent()
         self._history: list[DebateSession] = []
         self._lock = asyncio.Lock()
-        self._load_history()
 
     @classmethod
     def get_instance(cls) -> DebateEngine:
@@ -177,27 +179,96 @@ class DebateEngine:
             cls._instance = cls()
         return cls._instance
 
-    def _load_history(self) -> None:
-        """Load past debates from persistent json cache."""
-        if _HISTORY_FILE.exists():
-            try:
-                data = json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
-                for item in data:
-                    try:
-                        self._history.append(DebateSession(**item))
-                    except Exception:
-                        pass
-                logger.info("Loaded %d past AI debates from disk", len(self._history))
-            except Exception as exc:
-                logger.warning("Could not read debate history file: %s", exc)
-
-    def _save_history(self) -> None:
-        """Save history to disk asynchronously or safely."""
+    async def load_history(self) -> None:
+        """Load past debates from the database (survives restarts / redeploys)."""
         try:
-            dump_list = [s.model_dump() for s in self._history[:60]]
-            _HISTORY_FILE.write_text(json.dumps(dump_list, indent=2), encoding="utf-8")
+            async with async_session_factory() as session:
+                rows = (
+                    await session.execute(
+                        select(DebateRecordModel).order_by(DebateRecordModel.created_at.desc()).limit(200)
+                    )
+                ).scalars().all()
+            loaded: list[DebateSession] = []
+            for r in rows:
+                try:
+                    loaded.append(DebateSession.model_validate(json.loads(r.payload)))
+                except Exception:
+                    continue
+            async with self._lock:
+                known = {x.id for x in self._history}
+                self._history = sorted(
+                    self._history + [x for x in loaded if x.id not in known],
+                    key=lambda x: x.timestamp,
+                    reverse=True,
+                )
+            logger.info("Loaded %d past AI debates from database", len(loaded))
         except Exception as exc:
-            logger.warning("Could not save debate history file: %s", exc)
+            logger.warning("Could not load debate history from DB: %s", exc)
+
+    async def _persist(self, sess: DebateSession) -> None:
+        """Upsert one session into the database."""
+        try:
+            payload = json.dumps(sess.model_dump(mode="json"))
+            async with async_session_factory() as session:
+                row = await session.get(DebateRecordModel, sess.id)
+                if row is None:
+                    row = DebateRecordModel(id=sess.id, symbol=sess.symbol, created_at=sess.timestamp, payload=payload)
+                    session.add(row)
+                row.payload = payload
+                row.user_id = sess.user_id
+                row.executed = 1 if sess.executed else 0
+                row.order_id = sess.order_id
+                row.position_id = sess.position_id
+                await session.commit()
+        except Exception as exc:
+            logger.warning("Could not persist debate %s: %s", sess.id, exc)
+
+    async def get_history_with_outcomes(self, limit: int = 30, user_id: Optional[int] = None) -> list[dict[str, Any]]:
+        """Debate history; executed trades carry their live/closed outcome (SL/target/exit P&L)."""
+        sessions = self._history[:limit]
+        pos_ids = [x.position_id for x in sessions if x.position_id]
+        closed: dict[str, PaperTradeModel] = {}
+        if pos_ids:
+            try:
+                async with async_session_factory() as session:
+                    rows = (
+                        await session.execute(select(PaperTradeModel).where(PaperTradeModel.id.in_(pos_ids)))
+                    ).scalars().all()
+                closed = {r.id: r for r in rows}
+            except Exception as exc:
+                logger.warning("Outcome lookup failed: %s", exc)
+
+        out: list[dict[str, Any]] = []
+        for x in sessions:
+            item = x.model_dump(mode="json")
+            outcome = None
+            if x.position_id and (x.user_id == user_id):
+                live = paper_engine.active_positions.get(x.position_id)
+                if live:
+                    outcome = {
+                        "status": "OPEN",
+                        "entry_price": live.get("entry_price"),
+                        "ltp": live.get("current_ltp"),
+                        "stop_loss": live.get("stop_loss"),
+                        "target": live.get("target"),
+                        "pnl": live.get("unrealized_pnl", 0.0),
+                        "exit_reason": None,
+                    }
+                elif x.position_id in closed:
+                    t = closed[x.position_id]
+                    outcome = {
+                        "status": t.status,
+                        "entry_price": t.entry_price,
+                        "exit_price": t.exit_price,
+                        "stop_loss": t.stop_loss,
+                        "target": t.target,
+                        "pnl": t.realized_pnl if t.status == "CLOSED" else t.pnl,
+                        "exit_reason": t.exit_reason,
+                        "closed_at": t.closed_at,
+                    }
+            item["outcome"] = outcome
+            out.append(item)
+        return out
 
     async def build_snapshot(self, symbol: str = "NIFTY") -> MarketSnapshot:
         """Construct full point-in-time MarketSnapshot from Angel One live feed."""
@@ -224,8 +295,8 @@ class DebateEngine:
         max_pain = atm_strike
         call_wall = atm_strike + step
         put_wall = atm_strike - step
-        ce_oi_change = 45000.0
-        pe_oi_change = 52000.0
+        ce_oi_change = 0.0
+        pe_oi_change = 0.0
 
         try:
             chain_data = await angel_service.get_option_chain(sym, strikes_count=12)
@@ -256,7 +327,7 @@ class DebateEngine:
             vwap=tech["vwap"],
             rsi=tech["rsi"],
             atr=tech["atr"],
-            vix=14.5,
+            vix=float(angel_service.vix or 14.5),
             pcr=round(pcr, 2),
             ce_oi_change=round(ce_oi_change, 0),
             pe_oi_change=round(pe_oi_change, 0),
@@ -314,7 +385,8 @@ class DebateEngine:
 
         async with self._lock:
             self._history.insert(0, session)
-            self._save_history()
+            del self._history[200:]
+        await self._persist(session)
 
         logger.info("Debate session #%s generated successfully with verdict: %s", debate_id, judge_output.verdict)
         return session
@@ -340,52 +412,76 @@ class DebateEngine:
         debate_id: str,
         lots: int = 1,
         override_payload: Optional[dict[str, Any]] = None,
+        user_id: Optional[int] = None,
+        auto: bool = False,
     ) -> dict[str, Any]:
-        """Execute the Judge's recommended trade directly into the PaperEngine wallet."""
+        """Execute the Judge's trade in the PaperEngine at the LIVE Angel One option price."""
         session: Optional[DebateSession] = None
         if debate_id == "latest":
             session = self.get_latest_debate()
         else:
-            for s in self._history:
-                if s.id == debate_id:
-                    session = s
+            for x in self._history:
+                if x.id == debate_id:
+                    session = x
                     break
-
         if not session:
             raise ValueError(f"Debate session #{debate_id} not found.")
+        if session.executed and not override_payload:
+            raise ValueError("This debate verdict was already executed.")
 
         judge = session.judge
         verdict = judge.verdict
-
         if verdict == "NO_TRADE" and not override_payload:
             raise ValueError("Judge verdict was NO_TRADE. Capital preservation active.")
 
-        # Resolve trade parameters
         underlying = session.symbol
         spec = get_index_spec(underlying)
-        lot_size = spec.get("lot_size", 25)
+        step = spec.get("strike_step", 50)
 
         opt_type = "CE" if "CE" in verdict else ("PE" if "PE" in verdict else "CE")
         strike = float(judge.recommended_strike or session.market_snapshot.atm_strike)
-        entry_price = float(judge.entry_price or 120.0)
-        stop_loss = float(judge.stop_loss or (entry_price - 25.0))
-        target = float(judge.target or (entry_price + 35.0))
+        strike = float(round(strike / step) * step)
 
-        # Check for overrides
+        judge_entry = float(judge.entry_price or 0.0)
+        judge_sl = float(judge.stop_loss or 0.0)
+        judge_tgt = float(judge.target or 0.0)
+
         if override_payload:
             lots = int(override_payload.get("lots") or lots)
             if override_payload.get("strike"):
                 strike = float(override_payload["strike"])
             if override_payload.get("option_type"):
                 opt_type = str(override_payload["option_type"]).upper()
-            if override_payload.get("price"):
-                entry_price = float(override_payload["price"])
+
+        # ── Live price for the exact contract ────────────────────────────
+        quote = await angel_service.get_option_quote(underlying, strike, opt_type)
+        if quote:
+            entry_price = quote["ltp"]
+            order_symbol = quote["symbol"]
+        elif angel_service.data_source == "live":
+            raise ValueError(f"Live price for {underlying} {int(strike)} {opt_type} is unavailable; trade not executed.")
+        else:
+            entry_price = judge_entry if judge_entry > 0 else 120.0
+            order_symbol = f"{underlying}{int(strike)}{opt_type}"
+
+        # Keep the Judge's risk shape (% distance) but anchor it to the real entry price
+        if judge_entry > 0 and 0 < judge_sl < judge_entry:
+            sl_pct = (judge_entry - judge_sl) / judge_entry
+        else:
+            sl_pct = 0.20
+        if judge_entry > 0 and judge_tgt > judge_entry:
+            tgt_pct = (judge_tgt - judge_entry) / judge_entry
+        else:
+            tgt_pct = 0.30
+        stop_loss = round(entry_price * (1 - sl_pct), 2)
+        target = round(entry_price * (1 + tgt_pct), 2)
+        if override_payload:
             if override_payload.get("stop_loss"):
                 stop_loss = float(override_payload["stop_loss"])
             if override_payload.get("target"):
                 target = float(override_payload["target"])
-
-        order_symbol = f"{underlying}{int(strike)}{opt_type}"
+        else:
+            stop_loss, target = compute_clamped_sl_target(underlying, entry_price, stop_loss, target)
 
         order_req = {
             "symbol": order_symbol,
@@ -393,7 +489,6 @@ class DebateEngine:
             "strike": strike,
             "option_type": opt_type,
             "lots": max(1, lots),
-            "lot_size": lot_size,
             "side": "BUY",
             "order_type": "MARKET",
             "price": entry_price,
@@ -402,20 +497,34 @@ class DebateEngine:
             "target": target,
         }
 
-        # Submit paper order
-        order_res = await paper_engine.place_order(order_req)
+        order_res = await paper_engine.place_order(order_req, user_id=user_id)
+        if order_res.get("status") == "REJECTED":
+            raise ValueError(order_res.get("reject_reason", "Order rejected."))
 
-        # Mark debate session as executed
         session.executed = True
+        session.auto_executed = auto
+        session.user_id = user_id
         session.order_id = order_res.get("order_id")
-        self._save_history()
+        session.position_id = order_res.get("position_id")
+        session.exec_entry_price = entry_price
+        session.exec_symbol = order_symbol
+        session.skip_reason = None
+        await self._persist(session)
 
         return {
             "status": "success",
             "debate_id": session.id,
             "verdict": verdict,
+            "entry_price": entry_price,
+            "stop_loss": stop_loss,
+            "target": target,
+            "symbol": order_symbol,
             "order": order_res,
         }
+
+    async def mark_skipped(self, session: DebateSession, reason: str) -> None:
+        session.skip_reason = reason
+        await self._persist(session)
 
 
 debate_engine = DebateEngine.get_instance()

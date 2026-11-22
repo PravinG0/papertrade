@@ -26,6 +26,7 @@ import pyotp
 
 from config import INDEX_CONFIG, normalize_index_symbol, settings
 from greeks import BlackScholesEngine, calculate_max_pain, calculate_pcr
+from scrip_master import Contract, scrip_master
 
 logger = logging.getLogger("angel_service")
 logging.basicConfig(level=logging.INFO)
@@ -75,6 +76,14 @@ class AngelService:
         self._spot_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._scrip_master: dict[str, Any] = {}
         self._scrip_download_task: Optional[asyncio.Task] = None
+
+        # Live-quote plumbing (SmartAPI allows ~1 quote request / second)
+        self._quote_lock = asyncio.Lock()
+        self._last_quote_ts: float = 0.0
+        self._tok_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._last_live_ok: float = 0.0
+        self._oi_baseline: dict[str, tuple[str, float]] = {}
+        self.vix: Optional[float] = None
 
     @classmethod
     def get_instance(cls) -> AngelService:
@@ -182,86 +191,144 @@ class AngelService:
                 logger.error("Exception during Angel One authentication: %s", exc)
                 return False
 
-    # ── Spot Indices ─────────────────────────────────────────────────────────
+    # ── Live quote plumbing ──────────────────────────────────────────────────
 
-    async def get_spot_indices(self) -> list[dict[str, Any]]:
-        """Fetch real-time spot indices quotes for NIFTY, BANKNIFTY, FINNIFTY, SENSEX."""
-        now = time.time()
-        # Build batch request
-        exchange_tokens: dict[str, list[str]] = {"NSE": [], "BSE": []}
-        token_to_sym: dict[str, str] = {}
+    @property
+    def data_source(self) -> str:
+        """'live' when Angel One quotes were fetched in the last 30s, else 'simulated'."""
+        return "live" if (time.time() - self._last_live_ok) < 30.0 else "simulated"
 
-        for sym_key, spec in INDEX_CONFIG.items():
-            exch = spec["exchange"]
-            tok = spec["token"]
-            exchange_tokens[exch].append(tok)
-            token_to_sym[tok] = sym_key
-
-        quotes_by_sym: dict[str, dict[str, Any]] = {}
-
-        if await self.authenticate():
+    async def fetch_quotes(self, exchange_tokens: dict[str, list[str]]) -> dict[str, dict[str, Any]]:
+        """Throttled SmartAPI FULL-mode quote call. Returns {symbolToken: item}. Never raises."""
+        exchange_tokens = {k: v for k, v in exchange_tokens.items() if v}
+        if not exchange_tokens or not await self.authenticate():
+            return {}
+        async with self._quote_lock:
+            wait = self._last_quote_ts + 1.05 - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
             headers = self._base_headers()
             headers["Authorization"] = f"Bearer {self._jwt_token}"
-            payload = {
-                "mode": "FULL",
-                "exchangeTokens": exchange_tokens,
-            }
             try:
                 client = await self.get_http_client()
                 resp = await client.post(
                     "https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/",
-                    json=payload,
+                    json={"mode": "FULL", "exchangeTokens": exchange_tokens},
                     headers=headers,
                 )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("status") is True:
-                        fetched = data.get("data", {}).get("fetched") or []
-                        for item in fetched:
-                            tok = str(item.get("symbolToken", ""))
-                            sym_key = token_to_sym.get(tok)
-                            if not sym_key:
-                                continue
-                            ltp = float(item.get("ltp") or 0.0)
-                            close_val = float(item.get("close") or ltp)
-                            net_chg = float(item.get("netChange") or round(ltp - close_val, 2))
-                            pct_chg = float(
-                                item.get("percentChange")
-                                or (round((net_chg / close_val) * 100, 2) if close_val > 0 else 0.0)
-                            )
-                            quote_entry = {
-                                "symbol": sym_key,
-                                "name": INDEX_CONFIG[sym_key]["name"],
-                                "trading_symbol": item.get("tradingSymbol", INDEX_CONFIG[sym_key]["trading_symbol"]),
-                                "token": tok,
-                                "exchange": INDEX_CONFIG[sym_key]["exchange"],
-                                "ltp": round(ltp, 2),
-                                "open": round(float(item.get("open") or ltp), 2),
-                                "high": round(float(item.get("high") or ltp), 2),
-                                "low": round(float(item.get("low") or ltp), 2),
-                                "close": round(close_val, 2),
-                                "net_change": round(net_chg, 2),
-                                "percent_change": round(pct_chg, 2),
-                                "timestamp": datetime.now(tz=IST).isoformat(),
-                            }
-                            quotes_by_sym[sym_key] = quote_entry
-                            self._spot_cache[sym_key] = (now, quote_entry)
+                self._last_quote_ts = time.time()
+                if resp.status_code != 200:
+                    logger.warning("Quote API HTTP %s: %s", resp.status_code, resp.text[:120])
+                    return {}
+                data = resp.json()
+                if data.get("status") is not True:
+                    code = str(data.get("errorcode") or "")
+                    logger.warning("Quote API error %s: %s", code, data.get("message"))
+                    if code in ("AG8001", "AG8002", "AG8003"):  # token invalid / expired
+                        self._token_expiry_epoch = 0.0
+                    return {}
+                out: dict[str, dict[str, Any]] = {}
+                now = time.time()
+                for item in (data.get("data") or {}).get("fetched") or []:
+                    tok = str(item.get("symbolToken", ""))
+                    if tok:
+                        out[tok] = item
+                        self._tok_cache[tok] = (now, item)
+                if out:
+                    self._last_live_ok = now
+                return out
             except Exception as exc:
-                logger.warning("Error during batch quote fetch: %s", exc)
+                self._last_quote_ts = time.time()
+                logger.warning("Quote fetch failed: %s", exc)
+                return {}
 
-        # Build final response for all 4 configured indices
-        result = []
+    async def get_token_quotes(
+        self, items: list[tuple[str, str]], ttl: float = 1.5
+    ) -> dict[str, dict[str, Any]]:
+        """Quotes for [(exchange, token), ...] using a short per-token cache and 50-token chunks."""
+        now = time.time()
+        result: dict[str, dict[str, Any]] = {}
+        missing: dict[str, list[str]] = {}
+        for exch, tok in items:
+            hit = self._tok_cache.get(tok)
+            if hit and now - hit[0] < ttl:
+                result[tok] = hit[1]
+            else:
+                missing.setdefault(exch, []).append(tok)
+        for exch, toks in missing.items():
+            for i in range(0, len(toks), 50):
+                got = await self.fetch_quotes({exch: toks[i:i + 50]})
+                result.update(got)
+        return result
+
+    # ── Spot Indices ─────────────────────────────────────────────────────────
+
+    async def get_spot_indices(self) -> list[dict[str, Any]]:
+        """Fetch real-time spot indices quotes for NIFTY, BANKNIFTY, FINNIFTY, SENSEX (+ India VIX)."""
+        now = time.time()
+        exchange_tokens: dict[str, list[str]] = {"NSE": ["99926017"], "BSE": []}  # 99926017 = India VIX
+        token_to_sym: dict[str, str] = {}
         for sym_key, spec in INDEX_CONFIG.items():
+            exchange_tokens[spec["exchange"]].append(spec["token"])
+            token_to_sym[spec["token"]] = sym_key
+
+        quotes_by_sym: dict[str, dict[str, Any]] = {}
+        fetched = await self.get_token_quotes(
+            [(e, t) for e, toks in exchange_tokens.items() for t in toks], ttl=1.5
+        )
+        vix_item = fetched.get("99926017")
+        if vix_item and float(vix_item.get("ltp") or 0) > 0:
+            self.vix = round(float(vix_item["ltp"]), 2)
+
+        for tok, item in fetched.items():
+            sym_key = token_to_sym.get(tok)
+            if not sym_key:
+                continue
+            ltp = float(item.get("ltp") or 0.0)
+            if ltp <= 0:
+                continue
+            close_val = float(item.get("close") or ltp)
+            net_chg = float(item.get("netChange") or round(ltp - close_val, 2))
+            pct_chg = float(
+                item.get("percentChange")
+                or (round((net_chg / close_val) * 100, 2) if close_val > 0 else 0.0)
+            )
+            entry = {
+                "symbol": sym_key,
+                "name": INDEX_CONFIG[sym_key]["name"],
+                "trading_symbol": item.get("tradingSymbol", INDEX_CONFIG[sym_key]["trading_symbol"]),
+                "token": tok,
+                "exchange": INDEX_CONFIG[sym_key]["exchange"],
+                "ltp": round(ltp, 2),
+                "open": round(float(item.get("open") or ltp), 2),
+                "high": round(float(item.get("high") or ltp), 2),
+                "low": round(float(item.get("low") or ltp), 2),
+                "close": round(close_val, 2),
+                "net_change": round(net_chg, 2),
+                "percent_change": round(pct_chg, 2),
+                "timestamp": datetime.now(tz=IST).isoformat(),
+                "source": "live",
+            }
+            quotes_by_sym[sym_key] = entry
+            self._spot_cache[sym_key] = (now, entry)
+
+        result = []
+        for sym_key in INDEX_CONFIG:
             if sym_key in quotes_by_sym:
                 result.append(quotes_by_sym[sym_key])
-            elif sym_key in self._spot_cache and (now - self._spot_cache[sym_key][0] < 30.0):
-                result.append(self._spot_cache[sym_key][1].copy())
+                continue
+            cached = self._spot_cache.get(sym_key)
+            if cached and cached[1].get("source") in ("live", "stale"):
+                # Keep the last REAL price (flagged stale) rather than inventing one.
+                stale = cached[1].copy()
+                stale["source"] = "stale" if now - cached[0] > 30.0 else "live"
+                result.append(stale)
+            elif cached and now - cached[0] < 30.0:
+                result.append(cached[1].copy())
             else:
-                # Realistic fallback
                 fallback = self._generate_fallback_spot(sym_key)
                 self._spot_cache[sym_key] = (now, fallback)
                 result.append(fallback)
-
         return result
 
     def _generate_fallback_spot(self, symbol: str) -> dict[str, Any]:
@@ -288,6 +355,7 @@ class AngelService:
             "net_change": net_chg,
             "percent_change": pct_chg,
             "timestamp": datetime.now(tz=IST).isoformat(),
+            "source": "simulated",
         }
 
     async def get_spot_price(self, symbol: str = "NIFTY") -> float:
@@ -306,10 +374,18 @@ class AngelService:
         symbol: str = "NIFTY",
         interval: str = "5m",
         range_period: str = "5d",
+        contract: Optional[Contract] = None,
     ) -> list[dict[str, Any]]:
-        """Fetch historical candlestick data from Angel One SmartAPI."""
+        """Fetch historical candlestick data from Angel One SmartAPI.
+
+        With `contract` set, returns that option's REAL candles (empty list if unavailable -
+        never synthetic), otherwise the index candles.
+        """
         sym_norm = normalize_index_symbol(symbol)
-        spec = INDEX_CONFIG.get(sym_norm, INDEX_CONFIG["NIFTY"])
+        spec = dict(INDEX_CONFIG.get(sym_norm, INDEX_CONFIG["NIFTY"]))
+        if contract is not None:
+            spec["exchange"] = contract.exchange
+            spec["token"] = contract.token
 
         angel_interval = INTERVAL_MAP.get(interval.lower(), INTERVAL_MAP.get(interval, "FIVE_MINUTE"))
         cache_key = f"{spec['token']}_{angel_interval}_{range_period.lower()}"
@@ -324,8 +400,9 @@ class AngelService:
         if await self.authenticate():
             now_dt = datetime.now(tz=IST)
             days = 5
-            if range_period.lower() in ("1d", "today"):
-                days = 1
+            one_day = range_period.lower() in ("1d", "today")
+            if one_day:
+                days = 5  # look back over weekends/holidays; trimmed to the last session below
             elif range_period.lower() in ("5d",):
                 days = 5
             elif range_period.lower() in ("10d", "15d"):
@@ -393,11 +470,21 @@ class AngelService:
                         })
                         last_time = t
 
+                    if candles and one_day and angel_interval != "ONE_DAY":
+                        last_day = datetime.fromtimestamp(candles[-1]["time"], tz=IST).date()
+                        candles = [
+                            c for c in candles
+                            if datetime.fromtimestamp(c["time"], tz=IST).date() == last_day
+                        ]
+
                     if candles:
                         self._candle_cache[cache_key] = (now, candles)
                         return [c.copy() for c in candles]
             except Exception as exc:
                 logger.warning("Error fetching historical candles for %s: %s", sym_norm, exc)
+
+        if contract is not None:
+            return []
 
         # Fallback realistic candle generation
         fallback = self._generate_fallback_candles(sym_norm, interval=interval, count=80)
@@ -552,51 +639,252 @@ class AngelService:
 
     # ── Expiries ─────────────────────────────────────────────────────────────
 
-    def get_expiries(self, symbol: str = "NIFTY") -> list[dict[str, Any]]:
-        """Return upcoming expiry dates tailored to index rules.
+    # ── Expiries ─────────────────────────────────────────────────────────────
 
-        - NIFTY: Thursdays
-        - BANKNIFTY: Wednesdays
-        - FINNIFTY: Tuesdays
-        - SENSEX: Fridays
-        """
-        sym_norm = normalize_index_symbol(symbol)
+    async def ensure_contracts(self) -> bool:
+        """Make sure the real contract table is loaded, and sync lot sizes into INDEX_CONFIG."""
+        ok = await scrip_master.ensure_loaded()
+        if ok:
+            for name, spec in INDEX_CONFIG.items():
+                lot = scrip_master.lot_size(name)
+                if lot and lot != spec.get("lot_size"):
+                    logger.info("Lot size for %s updated from scrip master: %s -> %s", name, spec.get("lot_size"), lot)
+                    spec["lot_size"] = lot
+        return ok
+
+    def _rule_based_expiries(self, sym_norm: str) -> list[dict[str, Any]]:
+        """Fallback only (used when the scrip master is unavailable): weekday-rule expiries."""
         today = datetime.now(tz=IST).date()
-
-        # Day of week mapping (Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4)
-        if sym_norm == "BANKNIFTY":
-            expiry_weekday = 2  # Wednesday
-        elif sym_norm == "FINNIFTY":
-            expiry_weekday = 1  # Tuesday
-        elif sym_norm == "SENSEX":
-            expiry_weekday = 4  # Friday
-        else:
-            expiry_weekday = 3  # Thursday (NIFTY default)
-
+        weekday = {"BANKNIFTY": 1, "FINNIFTY": 1, "SENSEX": 3}.get(sym_norm, 1)  # Tue; SENSEX Thu
         expiries: list[dict[str, Any]] = []
-        # Find next 6 upcoming expiries
         d = today
         while len(expiries) < 6:
-            if d.weekday() == expiry_weekday and d >= today:
-                is_monthly = False
-                # Determine if monthly (last matching weekday of the month)
-                next_week_d = d + timedelta(days=7)
-                if next_week_d.month != d.month:
-                    is_monthly = True
-
-                exp_iso = d.strftime("%Y-%m-%d")
-                exp_label = d.strftime("%d-%b-%Y")
+            if d.weekday() == weekday:
+                is_monthly = (d + timedelta(days=7)).month != d.month
                 expiries.append({
-                    "date": exp_iso,
-                    "label": exp_label,
+                    "date": d.strftime("%Y-%m-%d"),
+                    "label": d.strftime("%d-%b-%Y"),
                     "is_nearest": len(expiries) == 0,
                     "type": "Monthly" if is_monthly else "Weekly",
                 })
             d += timedelta(days=1)
-
         return expiries
 
+    def get_expiries(self, symbol: str = "NIFTY") -> list[dict[str, Any]]:
+        """Upcoming expiries - the real exchange list when the scrip master is loaded."""
+        sym_norm = normalize_index_symbol(symbol)
+        real = scrip_master.expiries(sym_norm)[:6]
+        if not real:
+            return self._rule_based_expiries(sym_norm)
+        out: list[dict[str, Any]] = []
+        all_exp = scrip_master.expiries(sym_norm)
+        for i, iso in enumerate(real):
+            d = datetime.strptime(iso, "%Y-%m-%d").date()
+            later_same_month = any(e[:7] == iso[:7] and e > iso for e in all_exp)
+            out.append({
+                "date": iso,
+                "label": d.strftime("%d-%b-%Y"),
+                "is_nearest": i == 0,
+                "type": "Weekly" if later_same_month else "Monthly",
+            })
+        return out
+
+    # ── Real option quotes ───────────────────────────────────────────────────
+
+    def _pick_contract(self, symbol: str, underlying: str, strike: float, opt: str) -> Optional[Contract]:
+        return scrip_master.resolve(symbol, normalize_index_symbol(underlying), strike, opt.upper())
+
+    async def get_option_ltps(self, legs: list[dict[str, Any]]) -> dict[str, float]:
+        """Live LTP for open positions/orders. Returns {leg['symbol']: ltp}; unresolved legs are omitted."""
+        if not legs or not scrip_master.is_loaded:
+            return {}
+        pairs: dict[str, Contract] = {}
+        for leg in legs:
+            c = self._pick_contract(leg["symbol"], leg["underlying"], leg["strike"], leg["option_type"])
+            if c:
+                pairs[leg["symbol"]] = c
+        if not pairs:
+            return {}
+        quotes = await self.get_token_quotes(
+            list({(c.exchange, c.token) for c in pairs.values()}), ttl=1.5
+        )
+        out: dict[str, float] = {}
+        for sym, c in pairs.items():
+            q = quotes.get(c.token)
+            if q and float(q.get("ltp") or 0) > 0:
+                out[sym] = round(float(q["ltp"]), 2)
+        return out
+
+    async def get_option_quote(
+        self, underlying: str, strike: float, option_type: str, expiry: Optional[str] = None
+    ) -> Optional[dict[str, Any]]:
+        """Fresh live quote (symbol, ltp, bid, ask, lot size) for one contract; None if unavailable."""
+        await self.ensure_contracts()
+        name = normalize_index_symbol(underlying)
+        exps = scrip_master.expiries(name)
+        if not exps:
+            return None
+        iso = expiry if expiry in exps else exps[0]
+        c = scrip_master.contract(name, iso, int(strike), option_type.upper())
+        if not c:
+            return None
+        q = (await self.get_token_quotes([(c.exchange, c.token)], ttl=1.0)).get(c.token)
+        if not q or float(q.get("ltp") or 0) <= 0:
+            return None
+        depth = q.get("depth") or {}
+        bid = float(((depth.get("buy") or [{}])[0]).get("price") or 0)
+        ask = float(((depth.get("sell") or [{}])[0]).get("price") or 0)
+        return {
+            "symbol": c.symbol,
+            "expiry": c.expiry,
+            "ltp": round(float(q["ltp"]), 2),
+            "bid": round(bid, 2),
+            "ask": round(ask, 2),
+            "lot_size": c.lot_size,
+        }
+
+    def _oi_change(self, token: str, oi: float) -> float:
+        """OI change versus the first OI this server saw today (Angel's quote API has no day-change)."""
+        today = datetime.now(tz=IST).date().isoformat()
+        base = self._oi_baseline.get(token)
+        if not base or base[0] != today:
+            self._oi_baseline[token] = (today, oi)
+            return 0.0
+        return oi - base[1]
+
+    async def _live_chain_rows(
+        self,
+        sym_norm: str,
+        expiry_iso: str,
+        spot: float,
+        strikes_count: int,
+        lot_size: int,
+        t_years: float,
+    ) -> Optional[list[dict[str, Any]]]:
+        """Build option-chain rows from real Angel One quotes. None => fall back to simulation."""
+        all_strikes = scrip_master.strikes(sym_norm, expiry_iso)
+        if not all_strikes:
+            return None
+        atm_idx = min(range(len(all_strikes)), key=lambda i: abs(all_strikes[i] - spot))
+        lo = max(0, atm_idx - strikes_count)
+        hi = min(len(all_strikes), atm_idx + strikes_count + 1)
+        wanted = all_strikes[lo:hi]
+        atm_strike = all_strikes[atm_idx]
+
+        contracts: dict[tuple[int, str], Contract] = {}
+        for k in wanted:
+            for ot in ("CE", "PE"):
+                c = scrip_master.contract(sym_norm, expiry_iso, k, ot)
+                if c:
+                    contracts[(k, ot)] = c
+        if not contracts:
+            return None
+
+        quotes = await self.get_token_quotes(
+            [(c.exchange, c.token) for c in contracts.values()], ttl=2.0
+        )
+        if not quotes:
+            return None
+
+        def side(strike: int, ot: str) -> dict[str, Any]:
+            c = contracts.get((strike, ot))
+            q = quotes.get(c.token) if c else None
+            ltp = round(float(q.get("ltp") or 0.0), 2) if q else 0.0
+            depth = (q or {}).get("depth") or {}
+            bid = float(((depth.get("buy") or [{}])[0]).get("price") or 0.0)
+            ask = float(((depth.get("sell") or [{}])[0]).get("price") or 0.0)
+            oi = float((q or {}).get("opnInterest") or 0.0)
+            vol = int(float((q or {}).get("tradeVolume") or 0))
+            net = round(float((q or {}).get("netChange") or 0.0), 2)
+            pct = round(float((q or {}).get("percentChange") or 0.0), 2)
+            iv = BlackScholesEngine.calculate_implied_volatility(
+                spot, strike, t_years, ltp, option_type=ot
+            ) if ltp > 0.05 else 0.0
+            greeks = BlackScholesEngine.calculate_greeks(
+                spot=spot, strike=strike, time_to_expiry_years=t_years,
+                iv=max(0.01, iv / 100.0), option_type=ot,
+            )
+            greeks["price"] = ltp
+            greeks["iv"] = round(iv, 2)
+            return {
+                "symbol": c.symbol if c else f"{sym_norm}{strike}{ot}",
+                "token": c.token if c else None,
+                "strike": strike,
+                "option_type": ot,
+                "ltp": ltp,
+                "bid": round(bid, 2),
+                "ask": round(ask, 2),
+                "net_change": net,
+                "percent_change": pct,
+                "oi": int(oi),
+                "oi_change": int(self._oi_change(c.token, oi)) if c else 0,
+                "volume": vol,
+                "lot_amount": round(ltp * lot_size, 2),
+                "greeks": greeks,
+            }
+
+        rows = []
+        for k in wanted:
+            rows.append({
+                "strike": k,
+                "is_atm": k == atm_strike,
+                "lot_size": lot_size,
+                "ce": side(k, "CE"),
+                "pe": side(k, "PE"),
+            })
+        # If almost nothing priced, the market feed is not usable
+        priced = sum(1 for r in rows if r["ce"]["ltp"] > 0 or r["pe"]["ltp"] > 0)
+        return rows if priced >= max(1, len(rows) // 3) else None
+
     # ── Option Chain ─────────────────────────────────────────────────────────
+
+    def _simulated_rows(
+        self, sym_norm: str, spec: dict[str, Any], spot: float, atm_strike: int,
+        strikes_count: int, t_years: float, exp_suffix: str,
+    ) -> list[dict[str, Any]]:
+        """Synthetic Black-Scholes chain used ONLY when live data is unavailable (offline/dev)."""
+        step = spec["strike_step"]
+        lot_size = spec["lot_size"]
+        rows = []
+        base_vix = self.vix or 14.5
+        for offset in range(-strikes_count, strikes_count + 1):
+            strike = atm_strike + (offset * step)
+            dist_ratio = abs(spot - strike) / spot
+            smile_iv = (base_vix / 100.0) * (1.0 + 0.12 * dist_ratio)
+            ce_greeks = BlackScholesEngine.calculate_greeks(
+                spot=spot, strike=strike, time_to_expiry_years=t_years, iv=smile_iv, option_type="CE")
+            pe_greeks = BlackScholesEngine.calculate_greeks(
+                spot=spot, strike=strike, time_to_expiry_years=t_years, iv=smile_iv, option_type="PE")
+            ce_ltp, pe_ltp = ce_greeks["price"], pe_greeks["price"]
+            tick = spec["tick_size"]
+            ce_dist = abs(strike - (spot + step * 2))
+            pe_dist = abs(strike - (spot - step * 2))
+            ce_oi = int(max(25000, 3500000 - int(ce_dist * 450)))
+            pe_oi = int(max(25000, 3200000 - int(pe_dist * 450)))
+            ce_vol = int(max(5000, ce_oi * random.uniform(0.35, 0.75)))
+            pe_vol = int(max(5000, pe_oi * random.uniform(0.35, 0.75)))
+            ce_chg = round((spot - strike) * 0.04 + random.uniform(1.0, 5.0), 2)
+            pe_chg = round((strike - spot) * 0.04 - random.uniform(1.0, 5.0), 2)
+            rows.append({
+                "strike": strike,
+                "is_atm": strike == atm_strike,
+                "lot_size": lot_size,
+                "ce": {
+                    "symbol": f"{sym_norm}{exp_suffix}{strike}CE", "strike": strike, "option_type": "CE",
+                    "ltp": ce_ltp, "bid": max(0.05, round(ce_ltp - tick, 2)), "ask": round(ce_ltp + tick, 2),
+                    "net_change": ce_chg, "percent_change": round((ce_chg / max(ce_ltp, 1.0)) * 100, 2),
+                    "oi": ce_oi, "oi_change": int(ce_oi * 0.06), "volume": ce_vol,
+                    "lot_amount": round(ce_ltp * lot_size, 2), "greeks": ce_greeks,
+                },
+                "pe": {
+                    "symbol": f"{sym_norm}{exp_suffix}{strike}PE", "strike": strike, "option_type": "PE",
+                    "ltp": pe_ltp, "bid": max(0.05, round(pe_ltp - tick, 2)), "ask": round(pe_ltp + tick, 2),
+                    "net_change": pe_chg, "percent_change": round((pe_chg / max(pe_ltp, 1.0)) * 100, 2),
+                    "oi": pe_oi, "oi_change": int(pe_oi * 0.05), "volume": pe_vol,
+                    "lot_amount": round(pe_ltp * lot_size, 2), "greeks": pe_greeks,
+                },
+            })
+        return rows
 
     async def get_option_chain(
         self,
@@ -605,22 +893,17 @@ class AngelService:
         expiry: Optional[str] = None,
         override_spot: Optional[float] = None,
     ) -> dict[str, Any]:
-        """Generate a complete TradeLab-compatible Option Chain with Black-Scholes Greeks,
-
-        PCR, Max Pain, and Call/Put OI walls.
-        """
+        """Option chain with real Angel One prices/OI when live, Black-Scholes simulation otherwise."""
         sym_norm = normalize_index_symbol(symbol)
         spec = INDEX_CONFIG.get(sym_norm, INDEX_CONFIG["NIFTY"])
         step = spec["strike_step"]
+
+        await self.ensure_contracts()
         lot_size = spec["lot_size"]
 
-        # 1. Spot price
-        if override_spot is not None and override_spot > 0:
-            spot = float(override_spot)
-        else:
-            spot = await self.get_spot_price(sym_norm)
+        replaying = override_spot is not None and override_spot > 0
+        spot = float(override_spot) if replaying else await self.get_spot_price(sym_norm)
 
-        # 2. Expiry handling
         avail_expiries = self.get_expiries(sym_norm)
         selected_expiry = None
         if expiry:
@@ -631,118 +914,41 @@ class AngelService:
         if not selected_expiry and avail_expiries:
             selected_expiry = avail_expiries[0]
 
-        # Calculate time to expiry in years
-        today = datetime.now(tz=IST).date()
+        # Time to expiry (expiry settles 15:30 IST)
+        now_dt = datetime.now(tz=IST)
+        t_years = 3.0 / 365.0
         if selected_expiry:
             try:
-                exp_date = datetime.strptime(selected_expiry["date"], "%Y-%m-%d").date()
-                days_left = max(0.5, float((exp_date - today).days))
+                exp_dt = datetime.strptime(selected_expiry["date"], "%Y-%m-%d").replace(
+                    hour=15, minute=30, tzinfo=IST)
+                t_years = max((exp_dt - now_dt).total_seconds(), 3600.0) / (365.0 * 86400.0)
             except ValueError:
-                days_left = 3.0
-        else:
-            days_left = 3.0
-        t_years = days_left / 365.0
+                pass
 
-        # 3. ATM strike
+        data_source = "simulated"
+        chain_rows: Optional[list[dict[str, Any]]] = None
         atm_strike = int(round(spot / step) * step)
 
-        # 4. Strikes table generation
-        chain_rows = []
-        base_vix = 14.5  # Standard benchmark VIX
+        if not replaying and selected_expiry and scrip_master.is_loaded:
+            chain_rows = await self._live_chain_rows(
+                sym_norm, selected_expiry["date"], spot, strikes_count, lot_size, t_years)
+            if chain_rows:
+                data_source = "live"
+                atm_strike = next((r["strike"] for r in chain_rows if r["is_atm"]), atm_strike)
 
-        for offset in range(-strikes_count, strikes_count + 1):
-            strike = atm_strike + (offset * step)
-            is_atm = (strike == atm_strike)
-
-            # Volatility smile curve
-            dist_ratio = abs(spot - strike) / spot
-            smile_iv = (base_vix / 100.0) * (1.0 + 0.12 * dist_ratio)
-
-            # Black-Scholes Greeks
-            ce_greeks = BlackScholesEngine.calculate_greeks(
-                spot=spot,
-                strike=strike,
-                time_to_expiry_years=t_years,
-                iv=smile_iv,
-                option_type="CE",
-            )
-            pe_greeks = BlackScholesEngine.calculate_greeks(
-                spot=spot,
-                strike=strike,
-                time_to_expiry_years=t_years,
-                iv=smile_iv,
-                option_type="PE",
-            )
-
-            ce_ltp = ce_greeks["price"]
-            pe_ltp = pe_greeks["price"]
-
-            # Bid/Ask spreads
-            tick = spec["tick_size"]
-            ce_bid = max(0.05, round(ce_ltp - tick, 2))
-            ce_ask = round(ce_ltp + tick, 2)
-            pe_bid = max(0.05, round(pe_ltp - tick, 2))
-            pe_ask = round(pe_ltp + tick, 2)
-
-            # OI distribution: bell-shaped around ATM
-            ce_dist = abs(strike - (spot + step * 2))
-            pe_dist = abs(strike - (spot - step * 2))
-            ce_oi = int(max(25000, 3500000 - int(ce_dist * 450)))
-            pe_oi = int(max(25000, 3200000 - int(pe_dist * 450)))
-
-            ce_vol = int(max(5000, ce_oi * random.uniform(0.35, 0.75)))
-            pe_vol = int(max(5000, pe_oi * random.uniform(0.35, 0.75)))
-
-            ce_chg = round((spot - strike) * 0.04 + random.uniform(1.0, 5.0), 2)
-            pe_chg = round((strike - spot) * 0.04 - random.uniform(1.0, 5.0), 2)
-
+        if not chain_rows:
             exp_suffix = selected_expiry["date"].replace("-", "")[2:] if selected_expiry else "261120"
-            ce_symbol = f"{sym_norm}{exp_suffix}{strike}CE"
-            pe_symbol = f"{sym_norm}{exp_suffix}{strike}PE"
+            chain_rows = self._simulated_rows(
+                sym_norm, spec, spot, atm_strike, strikes_count, t_years, exp_suffix)
 
-            chain_rows.append({
-                "strike": strike,
-                "is_atm": is_atm,
-                "lot_size": lot_size,
-                "ce": {
-                    "symbol": ce_symbol,
-                    "strike": strike,
-                    "option_type": "CE",
-                    "ltp": ce_ltp,
-                    "bid": ce_bid,
-                    "ask": ce_ask,
-                    "net_change": ce_chg,
-                    "percent_change": round((ce_chg / max(ce_ltp, 1.0)) * 100, 2),
-                    "oi": ce_oi,
-                    "oi_change": int(ce_oi * 0.06),
-                    "volume": ce_vol,
-                    "lot_amount": round(ce_ltp * lot_size, 2),
-                    "greeks": ce_greeks,
-                },
-                "pe": {
-                    "symbol": pe_symbol,
-                    "strike": strike,
-                    "option_type": "PE",
-                    "ltp": pe_ltp,
-                    "bid": pe_bid,
-                    "ask": pe_ask,
-                    "net_change": pe_chg,
-                    "percent_change": round((pe_chg / max(pe_ltp, 1.0)) * 100, 2),
-                    "oi": pe_oi,
-                    "oi_change": int(pe_oi * 0.05),
-                    "volume": pe_vol,
-                    "lot_amount": round(pe_ltp * lot_size, 2),
-                    "greeks": pe_greeks,
-                },
-            })
-
-        # 5. Greeks and analytics summary
         max_pain_info = calculate_max_pain(chain_rows)
         pcr_info = calculate_pcr(chain_rows)
 
         return {
             "symbol": sym_norm,
             "name": spec["name"],
+            "data_source": data_source,
+            "vix": self.vix,
             "spot_price": spot,
             "atm_strike": atm_strike,
             "lot_size": lot_size,
@@ -758,7 +964,7 @@ class AngelService:
             "total_ce_oi": pcr_info["total_ce_oi"],
             "total_pe_oi": pcr_info["total_pe_oi"],
             "chain": chain_rows,
-            "timestamp": datetime.now(tz=IST).isoformat(),
+            "timestamp": now_dt.isoformat(),
         }
 
 

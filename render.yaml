@@ -17,8 +17,11 @@ services:
         value: "true"
       - key: KEEP_ALIVE_INTERVAL_SECONDS
         value: "600"
+      # IMPORTANT: set DATABASE_URL in the Render dashboard to your Supabase/Postgres URL.
+      # Render's free disk is wiped on every restart/redeploy, so a SQLite file would lose
+      # all users, trades and debate history.
       - key: DATABASE_URL
-        value: sqlite+aiosqlite:///backend/papertrade.db
+        sync: false
       - key: VIRTUAL_STARTING_CAPITAL
         value: "1000000.0"
       - key: ANGEL_API_KEY

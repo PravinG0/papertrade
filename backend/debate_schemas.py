@@ -163,6 +163,12 @@ class DebateSession(BaseModel):
     judge: JudgeAgentOutput
     executed: bool = Field(default=False, description="Whether the judge's trade was executed")
     order_id: Optional[str] = Field(default=None, description="Associated paper trade order ID if executed")
+    position_id: Optional[str] = Field(default=None, description="Paper position ID created by the execution")
+    user_id: Optional[int] = Field(default=None, description="Account the trade was executed in")
+    auto_executed: bool = Field(default=False, description="True when the scheduler executed it")
+    skip_reason: Optional[str] = Field(default=None, description="Why a BUY verdict was not executed")
+    exec_entry_price: Optional[float] = Field(default=None, description="Live option price actually filled")
+    exec_symbol: Optional[str] = Field(default=None, description="Exchange trading symbol of the traded option")
 
     @computed_field
     @property

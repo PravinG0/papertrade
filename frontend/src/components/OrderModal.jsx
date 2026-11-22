@@ -27,7 +27,8 @@ export default function OrderModal({
     ltp = 100,
     bid = 99.5,
     ask = 100.5,
-    lotSize = symbol === 'BANKNIFTY' ? 15 : 25,
+    lotSize = symbol === 'BANKNIFTY' ? 30 : symbol === 'SENSEX' ? 20 : 65,
+    expiry = null,
   } = orderData;
 
   const [orderType, setOrderType] = useState('MARKET'); // MARKET | LIMIT | SL
@@ -66,6 +67,8 @@ export default function OrderModal({
       await onSubmitOrder({
         symbol: `${symbol} ${strike} ${optionType}`,
         index_symbol: symbol,
+        underlying: symbol,
+        expiry,
         strike,
         option_type: optionType,
         side,

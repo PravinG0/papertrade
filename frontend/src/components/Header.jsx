@@ -27,6 +27,7 @@ export default function Header({
   indices = {},
   portfolio = {},
   replayState = {},
+  feedInfo = { source: 'live', marketOpen: true },
   activeTab = 'terminal',
   setActiveTab = () => {},
   onResetPortfolio = () => {},
@@ -79,7 +80,7 @@ export default function Header({
   return (
     <header className="bg-[#080c14] border-b border-slate-800 sticky top-0 z-40 select-none">
       {/* Top Main Bar */}
-      <div className="px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
+      <div className="px-3 sm:px-4 py-2 sm:py-2.5 flex flex-wrap items-center justify-between gap-2 sm:gap-3">
         {/* Brand & Mode */}
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2.5">
@@ -95,26 +96,55 @@ export default function Header({
                   Paper Sim
                 </span>
               </div>
-              <p className="text-[10px] text-slate-400 tracking-tight font-medium">
+              <p className="hidden sm:block text-[10px] text-slate-400 tracking-tight font-medium">
                 Institutional Paper Trading Engine
               </p>
             </div>
           </div>
 
           {/* Mode Pill */}
-          <div className="hidden sm:flex items-center">
+          <div className="flex items-center">
             {isReplay ? (
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-950/70 border border-amber-500/50 text-amber-300 text-xs font-semibold animate-pulse">
                 <PlayCircle size={14} className="text-amber-400" />
                 <span>REPLAY MODE ({replayState.current_date || 'Historical'})</span>
               </div>
-            ) : (
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs font-semibold">
+            ) : feedInfo.source === 'live' ? (
+              <div
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] sm:text-xs font-semibold ${
+                  feedInfo.marketOpen
+                    ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                    : 'bg-slate-900 border-slate-600/60 text-slate-300'
+                }`}
+                title={
+                  feedInfo.marketOpen
+                    ? 'Real-time Angel One prices'
+                    : 'Market closed - showing the last traded Angel One prices'
+                }
+              >
                 <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  {feedInfo.marketOpen && (
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  )}
+                  <span
+                    className={`relative inline-flex rounded-full h-2 w-2 ${
+                      feedInfo.marketOpen ? 'bg-emerald-500' : 'bg-slate-500'
+                    }`}
+                  ></span>
                 </span>
-                <span>LIVE FEED</span>
+                <span>{feedInfo.marketOpen ? 'LIVE' : 'MARKET CLOSED'}</span>
+              </div>
+            ) : (
+              <div
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-950/70 border border-amber-500/60 text-amber-300 text-[11px] sm:text-xs font-semibold"
+                title={
+                  feedInfo.source === 'stale'
+                    ? 'Angel One feed interrupted - showing last known real prices'
+                    : 'Angel One is not connected - prices are simulated and will not match your broker'
+                }
+              >
+                <span>⚠</span>
+                <span>{feedInfo.source === 'stale' ? 'FEED DELAYED' : 'SIMULATED DATA'}</span>
               </div>
             )}
           </div>
@@ -169,7 +199,7 @@ export default function Header({
           {/* Shortcuts Guide Button */}
           <button
             onClick={onOpenShortcuts}
-            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors border border-slate-700 flex items-center justify-center text-xs"
+            className="hidden sm:flex p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors border border-slate-700 items-center justify-center text-xs"
             title="Keyboard Shortcuts (?)"
           >
             <Keyboard size={14} />
@@ -178,7 +208,7 @@ export default function Header({
           {/* Sound Mute/Unmute Toggle Button */}
           <button
             onClick={toggleSound}
-            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors border border-slate-700 flex items-center justify-center text-xs"
+            className="hidden sm:flex p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors border border-slate-700 items-center justify-center text-xs"
             title={isMuted ? "Unmute Audio Feedback" : "Mute Audio Feedback"}
           >
             {isMuted ? <VolumeX size={14} className="text-slate-500" /> : <Volume2 size={14} className="text-cyan-400" />}
