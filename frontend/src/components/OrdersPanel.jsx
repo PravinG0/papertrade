@@ -17,12 +17,12 @@ export default function OrdersPanel({
   };
 
   return (
-    <div className="bg-[#0f172a] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full">
+    <div className="bg-[#ffffff] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full">
       {/* Header Bar */}
-      <div className="p-3 bg-[#080c14] border-b border-slate-800 flex items-center justify-between">
+      <div className="p-3 bg-[#f4f6fa] border-b border-slate-800 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Clock size={16} className="text-cyan-400" />
-          <h3 className="text-xs font-bold uppercase tracking-wider text-white">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-ink">
             Pending Orders ({orders.length})
           </h3>
         </div>
@@ -88,7 +88,7 @@ export default function OrdersPanel({
 
                     {/* Instrument */}
                     <td className="py-2 px-3 text-left">
-                      <span className="font-bold text-white">
+                      <span className="font-bold text-ink">
                         {ord.symbol || ord.option_symbol || 'Option'}
                       </span>
                       {ord.order_type && (

@@ -15,6 +15,7 @@ import AuthModal from './components/AuthModal';
 import DebateArena from './components/DebateArena';
 import QuickScalperBar from './components/QuickScalperBar';
 import WelcomeGuide from './components/WelcomeGuide';
+import BottomNav from './components/BottomNav';
 import { useAuth } from './context/AuthContext';
 import sound from './utils/audio';
 import {
@@ -512,7 +513,7 @@ export default function App() {
   }, [handleExitAllPositions]);
 
   return (
-    <div className="min-h-screen bg-[#080c14] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/20">
+    <div className="min-h-screen bg-[#f4f6fa] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/20">
       {/* Toast Notification */}
       {toast && (
         <div
@@ -552,7 +553,7 @@ export default function App() {
 
       {/* Replay Docked Bar (when enabled) */}
       {(showReplayBar || replayState.is_active) && (
-        <div className="px-4 py-2 bg-[#080c14] border-b border-amber-900/40">
+        <div className="px-4 py-2 bg-[#f4f6fa] border-b border-amber-900/40">
           <ReplayControls
             replayState={replayState}
             onClose={() => setShowReplayBar(false)}
@@ -566,7 +567,7 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <main className="flex-1 p-3 lg:p-4 max-w-[1920px] w-full mx-auto">
+      <main className="flex-1 p-3 lg:p-4 pb-24 md:pb-4 max-w-[1920px] w-full mx-auto">
         {/* Tab 1: Terminal (Split Option Chain + Chart + Positions) */}
         {activeTab === 'terminal' && (
           <WelcomeGuide marketOpen={feedInfo.marketOpen} onOpenDebate={() => setActiveTab('debate')} />
@@ -676,7 +677,7 @@ export default function App() {
               <div className="rounded-xl border border-slate-800 bg-slate-900/50">
                 <button
                   onClick={() => setShowScalper((v) => !v)}
-                  className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-slate-300 hover:text-white"
+                  className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-slate-300 hover:text-ink"
                 >
                   <span className="flex items-center gap-2">
                     <Zap size={13} className="text-amber-400" />
@@ -737,6 +738,8 @@ export default function App() {
           </div>
         )}
       </main>
+
+      <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} positionsCount={positions.length} />
 
       {/* Instant 1-Click Order Modal */}
       {orderModalData && (

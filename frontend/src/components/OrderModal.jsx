@@ -97,8 +97,8 @@ export default function OrderModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md max-h-[92vh] flex flex-col rounded-2xl overflow-hidden shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/50 backdrop-blur-sm animate-fadeIn">
+      <div className="bg-white border border-slate-700 w-full sm:max-w-md max-h-[92vh] flex flex-col rounded-t-2xl sm:rounded-2xl overflow-hidden shadow-2xl">
         {/* Top Header */}
         <div
           className={`p-4 flex items-center justify-between border-b ${
@@ -109,7 +109,7 @@ export default function OrderModal({
         >
           <div className="flex items-center gap-2.5">
             <div
-              className={`w-7 h-7 rounded-lg flex items-center justify-center text-white ${
+              className={`w-7 h-7 rounded-lg flex items-center justify-center text-ink ${
                 side === 'BUY' ? 'bg-emerald-600' : 'bg-rose-600'
               }`}
             >
@@ -117,7 +117,7 @@ export default function OrderModal({
             </div>
             <div>
               <div className="flex items-center gap-1.5">
-                <span className="font-bold text-sm text-white">
+                <span className="font-bold text-sm text-ink">
                   {side} {symbol} {strike} {optionType}
                 </span>
                 <span className="text-[10px] uppercase font-bold px-1.5 py-0.2 rounded bg-black/40 text-slate-300">
@@ -125,14 +125,14 @@ export default function OrderModal({
                 </span>
               </div>
               <div className="text-xs font-mono text-slate-300">
-                LTP: <strong className="text-white">₹{Number(ltp).toFixed(2)}</strong>
+                LTP: <strong className="text-ink">₹{Number(ltp).toFixed(2)}</strong>
               </div>
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className="p-1 rounded-lg hover:bg-slate-800/80 text-slate-400 hover:text-white transition-colors"
+            className="p-1 rounded-lg hover:bg-slate-800/80 text-slate-400 hover:text-ink transition-colors"
           >
             <X size={18} />
           </button>
@@ -191,7 +191,7 @@ export default function OrderModal({
                 max="50"
                 value={lots}
                 onChange={(e) => setLots(Math.max(1, parseInt(e.target.value) || 1))}
-                className="flex-1 h-10 bg-slate-900 border border-slate-700 rounded-xl text-center font-mono font-bold text-white text-sm focus:outline-none focus:border-cyan-500"
+                className="flex-1 h-10 bg-slate-900 border border-slate-700 rounded-xl text-center font-mono font-bold text-ink text-sm focus:outline-none focus:border-cyan-500"
               />
 
               <button
@@ -215,7 +215,7 @@ export default function OrderModal({
                 step="0.05"
                 value={limitPrice}
                 onChange={(e) => setLimitPrice(e.target.value)}
-                className="w-full h-10 px-3 bg-slate-900 border border-slate-700 rounded-xl font-mono text-sm text-white focus:outline-none focus:border-cyan-500"
+                className="w-full h-10 px-3 bg-slate-900 border border-slate-700 rounded-xl font-mono text-sm text-ink focus:outline-none focus:border-cyan-500"
                 placeholder="Enter price..."
                 required
               />
@@ -234,7 +234,7 @@ export default function OrderModal({
                 value={targetPrice}
                 onChange={(e) => setTargetPrice(e.target.value)}
                 placeholder="Optional Target"
-                className="w-full h-9 px-2.5 bg-slate-900 border border-slate-700 rounded-lg font-mono text-xs text-white focus:outline-none focus:border-emerald-500"
+                className="w-full h-9 px-2.5 bg-slate-900 border border-slate-700 rounded-lg font-mono text-xs text-ink focus:outline-none focus:border-emerald-500"
               />
             </div>
 
@@ -248,7 +248,7 @@ export default function OrderModal({
                 value={stopLossPrice}
                 onChange={(e) => setStopLossPrice(e.target.value)}
                 placeholder="Optional SL"
-                className="w-full h-9 px-2.5 bg-slate-900 border border-slate-700 rounded-lg font-mono text-xs text-white focus:outline-none focus:border-rose-500"
+                className="w-full h-9 px-2.5 bg-slate-900 border border-slate-700 rounded-lg font-mono text-xs text-ink focus:outline-none focus:border-rose-500"
               />
             </div>
           </div>
@@ -277,7 +277,7 @@ export default function OrderModal({
             <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-xs space-y-1">
               <p className="text-slate-300 font-semibold">What can happen</p>
               <p className="text-slate-400">
-                You pay <span className="text-white font-mono">{fmtInr(price * totalQty)}</span> ({totalQty} × ₹{price.toFixed(2)}).
+                You pay <span className="text-ink font-mono">{fmtInr(price * totalQty)}</span> ({totalQty} × ₹{price.toFixed(2)}).
                 {slNum > 0 && slNum < price
                   ? <> If the stop-loss hits you lose about <span className="text-rose-400 font-mono">{fmtInr((price - slNum) * totalQty)}</span>.</>
                   : <> With no stop-loss, the most you can lose is the full <span className="text-rose-400 font-mono">{fmtInr(price * totalQty)}</span>.</>}
@@ -293,7 +293,7 @@ export default function OrderModal({
           <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1.5 text-xs">
             <div className="flex items-center justify-between text-slate-400">
               <span>Required Margin:</span>
-              <span className="font-mono font-bold text-white num-tabular">
+              <span className="font-mono font-bold text-ink num-tabular">
                 ₹{estimatedMargin.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
               </span>
             </div>

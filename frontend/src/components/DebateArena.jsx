@@ -61,14 +61,14 @@ function ConvictionTugOfWar({ bullScore = 0, bearScore = 0 }) {
   }
 
   return (
-    <div className="bg-[#0D131F]/90 backdrop-blur-md border border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-lg space-y-3">
+    <div className="bg-[#ffffff]/90 backdrop-blur-md border border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-lg space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
             <Scale size={16} />
           </div>
           <div>
-            <h3 className="text-xs sm:text-sm font-bold text-white tracking-wide">
+            <h3 className="text-xs sm:text-sm font-bold text-ink tracking-wide">
               Conviction Tug-of-War
             </h3>
             <p className="text-[10px] text-slate-400">
@@ -119,11 +119,11 @@ function MarketMatrixBar({ snapshot }) {
   if (!snapshot) return null;
 
   return (
-    <div className="bg-[#080c14]/90 border border-slate-800/90 rounded-xl p-3 text-xs overflow-x-auto">
+    <div className="bg-[#f4f6fa]/90 border border-slate-800/90 rounded-xl p-3 text-xs overflow-x-auto">
       <div className="flex items-center justify-between gap-4 min-w-[760px]">
         <div className="flex items-center gap-1.5">
           <span className="text-slate-400 uppercase text-[10px] font-semibold">Spot</span>
-          <span className="font-mono font-bold text-white text-xs">₹{snapshot.spot_price?.toFixed(2)}</span>
+          <span className="font-mono font-bold text-ink text-xs">₹{snapshot.spot_price?.toFixed(2)}</span>
         </div>
         <div className="h-3 w-px bg-slate-800" />
         <div className="flex items-center gap-1.5">
@@ -532,7 +532,7 @@ export default function DebateArena({
   return (
     <div className="space-y-4 max-w-7xl mx-auto pb-12">
       {/* ── AUTO-DEBATE SCHEDULER CONTROL BAR ── */}
-      <div className="bg-[#0D131F]/90 backdrop-blur-md border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-xl">
+      <div className="bg-[#ffffff]/90 backdrop-blur-md border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-xl">
         <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 sm:gap-4">
           {/* Left: Auto-Debate Toggle, Active Badge & Interval Selector */}
           <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
@@ -579,12 +579,12 @@ export default function DebateArena({
                 value={schedulerInterval}
                 onChange={(e) => handleIntervalChange(e.target.value)}
                 disabled={schedulerLoading}
-                className="bg-transparent text-white font-mono font-bold text-xs focus:outline-none cursor-pointer"
+                className="bg-transparent text-ink font-mono font-bold text-xs focus:outline-none cursor-pointer"
               >
-                <option value={3} className="bg-slate-900 text-white">3m</option>
-                <option value={5} className="bg-slate-900 text-white">5m</option>
-                <option value={10} className="bg-slate-900 text-white">10m</option>
-                <option value={15} className="bg-slate-900 text-white">15m</option>
+                <option value={3} className="bg-slate-900 text-ink">3m</option>
+                <option value={5} className="bg-slate-900 text-ink">5m</option>
+                <option value={10} className="bg-slate-900 text-ink">10m</option>
+                <option value={15} className="bg-slate-900 text-ink">15m</option>
               </select>
             </div>
           </div>
@@ -647,7 +647,7 @@ export default function DebateArena({
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs font-mono">
               <Zap size={13} className="text-purple-400" />
               <span className="text-slate-400">Debates Run:</span>
-              <span className="font-bold text-white">{runCount}</span>
+              <span className="font-bold text-ink">{runCount}</span>
             </div>
           </div>
         </div>
@@ -669,14 +669,14 @@ export default function DebateArena({
       </div>
 
       {/* Top Studio Control Bar */}
-      <div className="bg-[#0D131F]/90 backdrop-blur-md border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <div className="bg-[#ffffff]/90 backdrop-blur-md border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-11 h-11 rounded-xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-cyan-500 flex items-center justify-center shadow-lg shadow-purple-900/40 text-white">
             <Brain size={24} />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-base sm:text-lg font-black text-white uppercase tracking-wider">
+              <h2 className="text-base sm:text-lg font-black text-ink uppercase tracking-wider">
                 AI Debate Studio
               </h2>
               <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-purple-950/80 text-purple-300 border border-purple-800/60">
@@ -724,7 +724,7 @@ export default function DebateArena({
           {/* History Button */}
           <button
             onClick={() => setShowHistory((prev) => !prev)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold transition-colors"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-ink text-xs font-semibold transition-colors"
             title="Debate history"
           >
             <History size={14} className="text-cyan-400" />
@@ -753,7 +753,7 @@ export default function DebateArena({
 
       {/* History Drawer / Panel */}
       {showHistory && (
-        <div className="bg-[#0D131F]/95 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
+        <div className="bg-[#ffffff]/95 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
           <div className="flex items-center justify-between border-b border-slate-800 pb-2">
             <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
               <History size={14} className="text-cyan-400" />
@@ -761,7 +761,7 @@ export default function DebateArena({
             </h3>
             <button
               onClick={() => setShowHistory(false)}
-              className="text-xs text-slate-400 hover:text-white"
+              className="text-xs text-slate-400 hover:text-ink"
             >
               Close
             </button>
@@ -817,19 +817,19 @@ export default function DebateArena({
 
       {/* Main Debate Display */}
       {loading && !debate ? (
-        <div className="flex flex-col items-center justify-center py-24 space-y-3 bg-[#0D131F]/60 rounded-2xl border border-slate-800/80">
+        <div className="flex flex-col items-center justify-center py-24 space-y-3 bg-[#ffffff]/60 rounded-2xl border border-slate-800/80">
           <div className="w-10 h-10 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
           <p className="text-xs text-slate-300 font-semibold tracking-wide">
             Ingesting live ticks & launching multi-agent debate...
           </p>
         </div>
       ) : !debate ? (
-        <div className="bg-[#0D131F]/90 backdrop-blur-md border border-slate-800 rounded-2xl p-12 text-center shadow-xl space-y-4">
+        <div className="bg-[#ffffff]/90 backdrop-blur-md border border-slate-800 rounded-2xl p-12 text-center shadow-xl space-y-4">
           <div className="w-16 h-16 rounded-2xl bg-purple-600/10 border border-purple-500/20 flex items-center justify-center text-purple-400 mx-auto">
             <Brain size={32} />
           </div>
           <div>
-            <h3 className="text-base font-bold text-white">No Active AI Debate Session</h3>
+            <h3 className="text-base font-bold text-ink">No Active AI Debate Session</h3>
             <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
               Click <span className="text-purple-400 font-semibold">"Run AI Debate"</span> to initiate an adversarial evaluation between Bull, Bear, and Judge agents using live Angel One SmartAPI exchange candles.
             </p>
@@ -849,7 +849,7 @@ export default function DebateArena({
           {/* Three-Column Arena Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {/* ── BULL AGENT CARD ── */}
-            <div className="bg-[#0D131F]/90 backdrop-blur-md border border-slate-800/80 hover:border-emerald-500/40 rounded-2xl overflow-hidden shadow-xl transition-all duration-300 flex flex-col justify-between">
+            <div className="bg-[#ffffff]/90 backdrop-blur-md border border-slate-800/80 hover:border-emerald-500/40 rounded-2xl overflow-hidden shadow-xl transition-all duration-300 flex flex-col justify-between">
               <div>
                 <div className="h-1.5 bg-gradient-to-r from-emerald-500 to-teal-400" />
                 <div className="p-4 sm:p-5 space-y-3.5">
@@ -857,7 +857,7 @@ export default function DebateArena({
                     <div className="flex items-center gap-2">
                       <span className="text-2xl">🐂</span>
                       <div>
-                        <h3 className="font-bold text-white text-sm sm:text-base">Bull Agent</h3>
+                        <h3 className="font-bold text-ink text-sm sm:text-base">Bull Agent</h3>
                         <p className="text-[11px] text-emerald-400 font-medium">CE Call Option Strategist</p>
                       </div>
                     </div>
@@ -920,7 +920,7 @@ export default function DebateArena({
             </div>
 
             {/* ── BEAR AGENT CARD ── */}
-            <div className="bg-[#0D131F]/90 backdrop-blur-md border border-slate-800/80 hover:border-rose-500/40 rounded-2xl overflow-hidden shadow-xl transition-all duration-300 flex flex-col justify-between">
+            <div className="bg-[#ffffff]/90 backdrop-blur-md border border-slate-800/80 hover:border-rose-500/40 rounded-2xl overflow-hidden shadow-xl transition-all duration-300 flex flex-col justify-between">
               <div>
                 <div className="h-1.5 bg-gradient-to-r from-rose-500 to-pink-500" />
                 <div className="p-4 sm:p-5 space-y-3.5">
@@ -928,7 +928,7 @@ export default function DebateArena({
                     <div className="flex items-center gap-2">
                       <span className="text-2xl">🐻</span>
                       <div>
-                        <h3 className="font-bold text-white text-sm sm:text-base">Bear Agent</h3>
+                        <h3 className="font-bold text-ink text-sm sm:text-base">Bear Agent</h3>
                         <p className="text-[11px] text-rose-400 font-medium">PE Put Option Strategist</p>
                       </div>
                     </div>
@@ -991,7 +991,7 @@ export default function DebateArena({
             </div>
 
             {/* ── JUDGE / CRO CARD (PROMINENT) ── */}
-            <div className="bg-[#0D131F]/90 backdrop-blur-md border-2 border-amber-500/50 hover:border-amber-400 rounded-2xl overflow-hidden shadow-2xl transition-all duration-300 flex flex-col justify-between">
+            <div className="bg-[#ffffff]/90 backdrop-blur-md border-2 border-amber-500/50 hover:border-amber-400 rounded-2xl overflow-hidden shadow-2xl transition-all duration-300 flex flex-col justify-between">
               <div>
                 <div className="h-2 bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-600" />
                 <div className="p-4 sm:p-5 space-y-3.5">
@@ -999,7 +999,7 @@ export default function DebateArena({
                     <div className="flex items-center gap-2">
                       <span className="text-2xl">⚖️</span>
                       <div>
-                        <h3 className="font-black text-white text-base">Judge & Risk Manager</h3>
+                        <h3 className="font-black text-ink text-base">Judge & Risk Manager</h3>
                         <p className="text-[11px] text-amber-400 font-medium">Chief Risk Officer Final Verdict</p>
                       </div>
                     </div>
@@ -1029,7 +1029,7 @@ export default function DebateArena({
 
                     {!isNoTrade && judge.recommended_strike > 0 && (
                       <div className="mt-1 text-xs text-slate-300 font-mono font-bold">
-                        Strike: <span className="text-white px-2 py-0.5 rounded bg-slate-800 border border-slate-700">{Math.round(judge.recommended_strike)} {isBuyCE ? 'CE' : 'PE'}</span>
+                        Strike: <span className="text-ink px-2 py-0.5 rounded bg-slate-800 border border-slate-700">{Math.round(judge.recommended_strike)} {isBuyCE ? 'CE' : 'PE'}</span>
                       </div>
                     )}
                   </div>

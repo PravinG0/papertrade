@@ -154,7 +154,7 @@ export default function PcrOiPanel({
   }, [data]);
 
   return (
-    <div className="bg-[#0f172a] border border-slate-800 rounded-xl p-4 shadow-xl space-y-6">
+    <div className="bg-[#ffffff] border border-slate-800 rounded-xl p-4 shadow-xl space-y-6">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
         <div className="flex items-center gap-2">
@@ -162,7 +162,7 @@ export default function PcrOiPanel({
             <Layers size={18} />
           </div>
           <div>
-            <h2 className="text-sm font-bold text-white uppercase tracking-wider">
+            <h2 className="text-sm font-bold text-ink uppercase tracking-wider">
               {selectedIndex} • Institutional OI & PCR Analysis
             </h2>
             <p className="text-xs text-slate-400">

@@ -213,13 +213,13 @@ function ChartPane({
         width: initialWidth,
         height: initialHeight,
         layout: {
-          background: { type: ColorType.Solid, color: '#080c14' },
-          textColor: '#94a3b8',
+          background: { type: ColorType.Solid, color: '#f4f6fa' },
+          textColor: '#64748b',
           fontSize: 10,
         },
         grid: {
-          vertLines: { color: 'rgba(30, 41, 59, 0.25)' },
-          horzLines: { color: 'rgba(30, 41, 59, 0.25)' },
+          vertLines: { color: 'rgba(148, 163, 184, 0.25)' },
+          horzLines: { color: 'rgba(148, 163, 184, 0.25)' },
         },
         crosshair: {
           mode: CrosshairMode.Normal,
@@ -227,12 +227,12 @@ function ChartPane({
           horzLine: { color: '#06b6d4', width: 1, style: 3, labelBackgroundColor: '#0891b2' },
         },
         timeScale: {
-          borderColor: '#1e293b',
+          borderColor: '#e2e8f0',
           timeVisible: true,
           secondsVisible: false,
         },
         rightPriceScale: {
-          borderColor: '#1e293b',
+          borderColor: '#e2e8f0',
           scaleMargins: { top: 0.1, bottom: 0.25 },
         },
       });
@@ -354,9 +354,9 @@ function ChartPane({
   }, [loadCandleData]);
 
   return (
-    <div className="flex flex-col h-full bg-[#080c14] border border-slate-800 rounded-lg overflow-hidden">
+    <div className="flex flex-col h-full bg-[#f4f6fa] border border-slate-800 rounded-lg overflow-hidden">
       {/* Pane Top Bar */}
-      <div className="p-2 bg-[#0c1322] border-b border-slate-800 flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
+      <div className="p-2 bg-[#ffffff] border-b border-slate-800 flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
         <div className="flex items-center gap-1.5">
           <span
             className={`px-2 py-0.5 rounded font-mono font-bold text-[11px] ${
@@ -376,7 +376,7 @@ function ChartPane({
                 onClick={() => setSelectedTf(tf)}
                 className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all ${
                   selectedTf.interval === tf.interval
-                    ? 'bg-slate-700 text-white'
+                    ? 'bg-slate-700 text-ink'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
@@ -484,9 +484,9 @@ export default function TradingChart({
   const effectiveContract = contract;
 
   return (
-    <div className="bg-[#0f172a] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full">
+    <div className="bg-[#ffffff] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full">
       {/* Chart Global Header Controls */}
-      <div className="px-3 py-2 bg-[#080c14] border-b border-slate-800 flex items-center justify-between gap-2 text-xs">
+      <div className="px-3 py-2 bg-[#f4f6fa] border-b border-slate-800 flex items-center justify-between gap-2 text-xs">
         {/* Left: Index Selector */}
         <div className="flex items-center gap-2">
           <div className="flex items-center bg-slate-900 p-0.5 rounded-lg border border-slate-800">
@@ -510,7 +510,7 @@ export default function TradingChart({
               <span>{contract.strike} {contract.option_type}</span>
               <button
                 onClick={onClearContract}
-                className="text-slate-400 hover:text-white text-[10px]"
+                className="text-slate-400 hover:text-ink text-[10px]"
                 title="Return to Spot Index"
               >
                 ✕

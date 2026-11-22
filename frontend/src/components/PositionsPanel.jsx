@@ -62,12 +62,12 @@ export default function PositionsPanel({
   };
 
   return (
-    <div className="bg-[#0f172a] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full">
+    <div className="bg-[#ffffff] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full">
       {/* Header Bar */}
-      <div className="p-3 bg-[#080c14] border-b border-slate-800 flex items-center justify-between">
+      <div className="p-3 bg-[#f4f6fa] border-b border-slate-800 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Activity size={16} className="text-cyan-400" />
-          <h3 className="text-xs font-bold uppercase tracking-wider text-white">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-ink">
             Active Positions ({positions.length})
           </h3>
         </div>
@@ -123,7 +123,7 @@ export default function PositionsPanel({
                   <tr key={id} className="hover:bg-slate-800/40 transition-colors">
                     {/* Instrument */}
                     <td className="py-2 px-3 text-left">
-                      <span className="font-bold text-white">
+                      <span className="font-bold text-ink">
                         {pos.option_symbol || pos.symbol || 'NIFTY Option'}
                       </span>
                       <div className="text-[10px] text-slate-500 font-sans">
@@ -160,7 +160,7 @@ export default function PositionsPanel({
                     </td>
 
                     {/* Live LTP */}
-                    <td className="py-2 px-2 text-right font-bold text-white num-tabular">
+                    <td className="py-2 px-2 text-right font-bold text-ink num-tabular">
                       ₹{Number(liveLtp).toFixed(2)}
                     </td>
 
@@ -220,7 +220,7 @@ export default function PositionsPanel({
       </div>
 
       {/* Bottom Summary Bar */}
-      <div className="p-2.5 bg-[#080c14] border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+      <div className="p-2.5 bg-[#f4f6fa] border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-4 font-mono">
           <div>
             <span className="text-slate-500 font-sans uppercase text-[10px] mr-1">Total Margin Used:</span>

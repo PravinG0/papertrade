@@ -3,8 +3,8 @@
 @tailwind utilities;
 
 :root {
-  --bg-primary: #080c14;
-  --bg-secondary: #0f172a;
+  --bg-primary: #f4f6fa;
+  --bg-secondary: #ffffff;
   --bg-tertiary: #1e293b;
   --accent-cyan: #06b6d4;
   --accent-emerald: #10b981;
@@ -14,7 +14,7 @@
 
 body {
   background-color: var(--bg-primary);
-  color: #f1f5f9;
+  color: #0f172a;
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   overflow-x: hidden;
 }
@@ -32,24 +32,24 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(8, 12, 20, 0.7);
+  background: rgba(226, 232, 240, 0.8);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(51, 65, 85, 0.6);
+  background: rgba(148, 163, 184, 0.7);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.8);
+  background: rgba(100, 116, 139, 0.9);
 }
 
 /* Glass panel */
 .glass-panel {
-  background: rgba(15, 23, 42, 0.75);
+  background: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(51, 65, 85, 0.5);
+  border: 1px solid rgba(203, 213, 225, 0.8);
 }
 
 /* Hide scrollbar utility for sleek mobile touch-scroll ribbons */
@@ -83,4 +83,11 @@ table[data-advanced="true"] { min-width: 850px; }
   table[data-advanced="false"] td { padding-left: 0.25rem; padding-right: 0.25rem; }
   table[data-advanced="false"] td button { padding-left: 0.3rem; padding-right: 0.3rem; font-size: 10px; }
   table[data-advanced="false"] td { font-size: 11px; }
+}
+
+/* Phones: finger-sized controls, and 16px inputs so iOS Safari doesn't zoom on focus */
+@media (max-width: 639px) {
+  input, select, textarea { font-size: 16px !important; }
+  table td button { min-height: 34px; }
+  button { touch-action: manipulation; }
 }

@@ -227,12 +227,12 @@ export default function StrategyPayoff({
   }, [chartPoints, spotPrice]);
 
   return (
-    <div className="bg-[#0f172a] border border-slate-800 rounded-xl overflow-hidden shadow-2xl flex flex-col p-4 gap-4">
+    <div className="bg-[#ffffff] border border-slate-800 rounded-xl overflow-hidden shadow-2xl flex flex-col p-4 gap-4">
       {/* Top Header & Strategy Selector */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
         <div className="flex items-center gap-2">
           <Layers size={18} className="text-cyan-400" />
-          <h2 className="text-sm font-bold uppercase tracking-wider text-white">Options Strategy Payoff Analyzer</h2>
+          <h2 className="text-sm font-bold uppercase tracking-wider text-ink">Options Strategy Payoff Analyzer</h2>
           <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-cyan-950 border border-cyan-800 text-cyan-300">
             {selectedIndex} • Spot ₹{Number(spotPrice).toLocaleString('en-IN')}
           </span>
@@ -328,7 +328,7 @@ export default function StrategyPayoff({
       )}
 
       {/* SVG Payoff Curve Diagram */}
-      <div className="bg-[#080c14] border border-slate-800 rounded-xl p-3 relative flex flex-col items-center">
+      <div className="bg-[#f4f6fa] border border-slate-800 rounded-xl p-3 relative flex flex-col items-center">
         {loading && (
           <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center z-10 text-xs text-cyan-400 font-mono">
             Calculating payoff matrix...
@@ -407,7 +407,7 @@ export default function StrategyPayoff({
                       cy={cy}
                       r={isHovered ? 6 : 3}
                       fill={pt.is_profit ? '#10b981' : '#f43f5e'}
-                      stroke="#0f172a"
+                      stroke="#ffffff"
                       strokeWidth="1.5"
                       className="cursor-pointer transition-all"
                     />

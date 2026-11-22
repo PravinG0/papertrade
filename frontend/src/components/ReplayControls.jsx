@@ -130,7 +130,7 @@ export default function ReplayControls({
   };
 
   return (
-    <div className="bg-[#0f172a]/95 backdrop-blur-md border border-amber-500/50 rounded-xl p-3 shadow-2xl flex flex-wrap items-center justify-between gap-3 text-xs select-none">
+    <div className="bg-[#ffffff]/95 backdrop-blur-md border border-amber-500/50 rounded-xl p-3 shadow-2xl flex flex-wrap items-center justify-between gap-3 text-xs select-none">
       {/* Date Selector & Mode Label */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-950/80 border border-amber-600/50 text-amber-300 font-bold uppercase tracking-wider text-[11px]">
@@ -221,7 +221,7 @@ export default function ReplayControls({
                 className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-all ${
                   speed === s
                     ? 'bg-amber-600 text-slate-950 shadow-sm'
-                    : 'text-slate-400 hover:text-white'
+                    : 'text-slate-400 hover:text-ink'
                 }`}
               >
                 {s}x
@@ -244,7 +244,7 @@ export default function ReplayControls({
       {!isActive && (
         <button
           onClick={onClose}
-          className="p-1 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800 transition-colors"
+          className="p-1 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-800 transition-colors"
         >
           <X size={15} />
         </button>

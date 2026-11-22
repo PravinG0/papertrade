@@ -169,13 +169,13 @@ export default function PnlHeatmap() {
   return (
     <div className="space-y-4">
       {/* 1. Header Toolbar */}
-      <div className="bg-[#0f172a] border border-slate-800 rounded-xl p-4 shadow-xl flex flex-wrap items-center justify-between gap-3">
+      <div className="bg-[#ffffff] border border-slate-800 rounded-xl p-4 shadow-xl flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-800 flex items-center justify-center text-white shadow-lg">
             <CalendarIcon size={20} />
           </div>
           <div>
-            <h1 className="text-base font-extrabold text-white tracking-wide flex items-center gap-2">
+            <h1 className="text-base font-extrabold text-ink tracking-wide flex items-center gap-2">
               <span>Performance Analytics & Trade Journal</span>
               <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-cyan-950 text-cyan-300 border border-cyan-800">
                 PRO JOURNAL
@@ -215,7 +215,7 @@ export default function PnlHeatmap() {
       {/* 2. Key Performance Indicators */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {/* Net Realized P&L */}
-        <div className="p-3.5 rounded-xl bg-[#0f172a] border border-slate-800 shadow">
+        <div className="p-3.5 rounded-xl bg-[#ffffff] border border-slate-800 shadow">
           <div className="text-[11px] text-slate-400 uppercase font-semibold flex items-center justify-between">
             <span>Net Realized P&L</span>
             <DollarSign size={13} className="text-emerald-400" />
@@ -231,7 +231,7 @@ export default function PnlHeatmap() {
         </div>
 
         {/* Trade Win Rate */}
-        <div className="p-3.5 rounded-xl bg-[#0f172a] border border-slate-800 shadow">
+        <div className="p-3.5 rounded-xl bg-[#ffffff] border border-slate-800 shadow">
           <div className="text-[11px] text-slate-400 uppercase font-semibold flex items-center justify-between">
             <span>Win Rate</span>
             <Award size={13} className="text-cyan-400" />
@@ -245,7 +245,7 @@ export default function PnlHeatmap() {
         </div>
 
         {/* Profit Factor */}
-        <div className="p-3.5 rounded-xl bg-[#0f172a] border border-slate-800 shadow">
+        <div className="p-3.5 rounded-xl bg-[#ffffff] border border-slate-800 shadow">
           <div className="text-[11px] text-slate-400 uppercase font-semibold flex items-center justify-between">
             <span>Profit Factor</span>
             <TrendingUp size={13} className="text-amber-400" />
@@ -257,7 +257,7 @@ export default function PnlHeatmap() {
         </div>
 
         {/* Avg Win vs Avg Loss */}
-        <div className="p-3.5 rounded-xl bg-[#0f172a] border border-slate-800 shadow">
+        <div className="p-3.5 rounded-xl bg-[#ffffff] border border-slate-800 shadow">
           <div className="text-[11px] text-slate-400 uppercase font-semibold flex items-center justify-between">
             <span>Avg Win / Loss</span>
             <Percent size={13} className="text-violet-400" />
@@ -269,7 +269,7 @@ export default function PnlHeatmap() {
         </div>
 
         {/* Max Drawdown */}
-        <div className="p-3.5 rounded-xl bg-[#0f172a] border border-slate-800 shadow">
+        <div className="p-3.5 rounded-xl bg-[#ffffff] border border-slate-800 shadow">
           <div className="text-[11px] text-slate-400 uppercase font-semibold flex items-center justify-between">
             <span>Max Drawdown</span>
             <ShieldAlert size={13} className="text-rose-400" />
@@ -281,7 +281,7 @@ export default function PnlHeatmap() {
         </div>
 
         {/* Charges & Taxes */}
-        <div className="p-3.5 rounded-xl bg-[#0f172a] border border-slate-800 shadow">
+        <div className="p-3.5 rounded-xl bg-[#ffffff] border border-slate-800 shadow">
           <div className="text-[11px] text-slate-400 uppercase font-semibold flex items-center justify-between">
             <span>Total Charges</span>
             <Receipt size={13} className="text-slate-400" />
@@ -296,7 +296,7 @@ export default function PnlHeatmap() {
       {/* 3. Cumulative Equity Curve & Calendar Heatmap Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
         {/* Left 7 cols: Calendar Heatmap */}
-        <div className="lg:col-span-7 bg-[#0f172a] border border-slate-800 rounded-xl p-4 shadow-xl">
+        <div className="lg:col-span-7 bg-[#ffffff] border border-slate-800 rounded-xl p-4 shadow-xl">
           <div className="flex items-center justify-between mb-3">
             <div className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
               <CalendarIcon size={14} className="text-cyan-400" />
@@ -340,7 +340,7 @@ export default function PnlHeatmap() {
               const isLoss = pnl < 0;
               const isSelected = selectedDay === dateKey;
 
-              let bgClass = 'bg-[#080c14] border-slate-800 text-slate-300';
+              let bgClass = 'bg-[#f4f6fa] border-slate-800 text-slate-300';
               if (isProfit) bgClass = 'bg-emerald-950/40 border-emerald-600/60 text-emerald-200';
               else if (isLoss) bgClass = 'bg-rose-950/40 border-rose-600/60 text-rose-200';
 
@@ -381,7 +381,7 @@ export default function PnlHeatmap() {
         </div>
 
         {/* Right 5 cols: Cumulative Equity Curve */}
-        <div className="lg:col-span-5 bg-[#0f172a] border border-slate-800 rounded-xl p-4 shadow-xl flex flex-col">
+        <div className="lg:col-span-5 bg-[#ffffff] border border-slate-800 rounded-xl p-4 shadow-xl flex flex-col">
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
               <TrendingUp size={14} className="text-emerald-400" />
@@ -403,9 +403,9 @@ export default function PnlHeatmap() {
               </defs>
 
               {/* Grid Lines */}
-              <line x1="30" y1="20" x2="390" y2="20" stroke="#1e293b" strokeDasharray="3,3" />
-              <line x1="30" y1="80" x2="390" y2="80" stroke="#1e293b" strokeDasharray="3,3" />
-              <line x1="30" y1="140" x2="390" y2="140" stroke="#1e293b" strokeDasharray="3,3" />
+              <line x1="30" y1="20" x2="390" y2="20" stroke="#e2e8f0" strokeDasharray="3,3" />
+              <line x1="30" y1="80" x2="390" y2="80" stroke="#e2e8f0" strokeDasharray="3,3" />
+              <line x1="30" y1="140" x2="390" y2="140" stroke="#e2e8f0" strokeDasharray="3,3" />
 
               {/* Path generation */}
               {(() => {
@@ -445,7 +445,7 @@ export default function PnlHeatmap() {
                           cy={cy}
                           r="3"
                           fill="#38bdf8"
-                          stroke="#080c14"
+                          stroke="#f4f6fa"
                           strokeWidth="1.5"
                         />
                       );
@@ -467,8 +467,8 @@ export default function PnlHeatmap() {
       </div>
 
       {/* 4. Closed Trades Log Table */}
-      <div className="bg-[#0f172a] border border-slate-800 rounded-xl overflow-hidden shadow-xl">
-        <div className="p-3 bg-[#080c14] border-b border-slate-800 flex items-center justify-between">
+      <div className="bg-[#ffffff] border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+        <div className="p-3 bg-[#f4f6fa] border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <FileSpreadsheet size={15} className="text-cyan-400" />
             <h2 className="text-xs font-bold text-slate-200 uppercase tracking-wider">

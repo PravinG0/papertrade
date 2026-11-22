@@ -78,18 +78,18 @@ export default function Header({
   };
 
   return (
-    <header className="bg-[#080c14] border-b border-slate-800 sticky top-0 z-40 select-none">
+    <header className="bg-[#f4f6fa] border-b border-slate-800 sticky top-0 z-40 select-none">
       {/* Top Main Bar */}
       <div className="px-3 sm:px-4 py-2 sm:py-2.5 flex flex-wrap items-center justify-between gap-2 sm:gap-3">
         {/* Brand & Mode */}
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-600 via-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-cyan-900/30">
-              <Sparkles className="w-4 h-4 text-white" />
+              <Sparkles className="w-4 h-4 text-ink" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-black text-sm tracking-wider text-white uppercase font-sans">
+                <span className="font-black text-sm tracking-wider text-ink uppercase font-sans">
                   The TradeLab
                 </span>
                 <span className="text-[10px] uppercase font-bold tracking-widest px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800/60">
@@ -166,7 +166,7 @@ export default function Header({
               <Wallet size={13} className="text-cyan-400 shrink-0" />
               <div className="flex flex-col">
                 <span className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 font-semibold">Capital</span>
-                <span className="font-mono font-bold text-white text-[11px] sm:text-xs num-tabular">
+                <span className="font-mono font-bold text-ink text-[11px] sm:text-xs num-tabular">
                   ₹{Number(capital).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                 </span>
               </div>
@@ -189,7 +189,7 @@ export default function Header({
           {/* Calculator Tool Button */}
           <button
             onClick={onOpenCalculator}
-            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors border border-slate-700 flex items-center gap-1.5 text-xs font-medium"
+            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-ink transition-colors border border-slate-700 flex items-center gap-1.5 text-xs font-medium"
             title="Position Size & Risk Calculator"
           >
             <Calculator size={13} className="text-cyan-400" />
@@ -199,7 +199,7 @@ export default function Header({
           {/* Shortcuts Guide Button */}
           <button
             onClick={onOpenShortcuts}
-            className="hidden sm:flex p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors border border-slate-700 items-center justify-center text-xs"
+            className="hidden sm:flex p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-ink transition-colors border border-slate-700 items-center justify-center text-xs"
             title="Keyboard Shortcuts (?)"
           >
             <Keyboard size={14} />
@@ -208,7 +208,7 @@ export default function Header({
           {/* Sound Mute/Unmute Toggle Button */}
           <button
             onClick={toggleSound}
-            className="hidden sm:flex p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors border border-slate-700 items-center justify-center text-xs"
+            className="hidden sm:flex p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-ink transition-colors border border-slate-700 items-center justify-center text-xs"
             title={isMuted ? "Unmute Audio Feedback" : "Mute Audio Feedback"}
           >
             {isMuted ? <VolumeX size={14} className="text-slate-500" /> : <Volume2 size={14} className="text-cyan-400" />}
@@ -217,7 +217,7 @@ export default function Header({
           {/* Reset Portfolio Button */}
           <button
             onClick={onResetPortfolio}
-            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors border border-slate-700 flex items-center gap-1.5 text-xs font-medium"
+            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-ink transition-colors border border-slate-700 flex items-center gap-1.5 text-xs font-medium"
             title="Reset Portfolio to ₹10,00,000"
           >
             <RotateCcw size={13} className="text-amber-400" />
@@ -260,7 +260,7 @@ export default function Header({
 
               {showUserDropdown && (
                 <div
-                  className="absolute right-0 mt-2 w-52 bg-[#0b0f19] border border-slate-800 rounded-xl shadow-2xl shadow-black/80 py-1.5 z-50 text-xs"
+                  className="absolute right-0 mt-2 w-52 bg-[#ffffff] border border-slate-800 rounded-xl shadow-2xl shadow-black/80 py-1.5 z-50 text-xs"
                   onClick={() => setShowUserDropdown(false)}
                 >
                   <div className="px-3 py-2 border-b border-slate-800 flex items-center gap-2.5">
@@ -281,7 +281,7 @@ export default function Header({
                     )}
                     <div className="min-w-0 flex-1">
                       <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Signed in as</p>
-                      <p className="font-semibold text-white truncate">{user.username}</p>
+                      <p className="font-semibold text-ink truncate">{user.username}</p>
                       <p className="text-[10px] text-cyan-400 truncate">{user.email}</p>
                     </div>
                   </div>
@@ -312,7 +312,7 @@ export default function Header({
       </div>
 
       {/* Mobile Live Indices Ribbon (< lg screens) */}
-      <div className="flex lg:hidden items-center gap-2 px-3 py-1 bg-[#05080f] border-t border-slate-800/60 overflow-x-auto scrollbar-none text-xs">
+      <div className="flex lg:hidden items-center gap-2 px-3 py-1 bg-[#eef1f6] border-t border-slate-800/60 overflow-x-auto scrollbar-none text-xs">
         {renderTicker('NIFTY', 'NIFTY 50', 24980)}
         {renderTicker('BANKNIFTY', 'BANK NIFTY', 52140)}
         {renderTicker('FINNIFTY', 'FINNIFTY', 24450)}
@@ -321,7 +321,7 @@ export default function Header({
 
       {/* Sub-bar: Navigation Tabs & Mobile Ticker */}
       <div className="px-3 sm:px-4 py-1.5 bg-slate-950/90 border-t border-slate-800/80 flex items-center justify-between gap-2 overflow-x-auto scrollbar-none">
-        <div className="flex items-center gap-1 text-xs shrink-0">
+        <div className="hidden md:flex items-center gap-1 text-xs shrink-0">
           <button
             onClick={() => setActiveTab('terminal')}
             className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all ${
@@ -378,7 +378,7 @@ export default function Header({
                 : 'text-purple-400 hover:text-purple-200 hover:bg-purple-950/40'
             }`}
           >
-            <Brain size={14} className={activeTab === 'debate' ? 'text-white' : 'text-purple-400'} />
+            <Brain size={14} className={activeTab === 'debate' ? 'text-ink' : 'text-purple-400'} />
             <span className="font-bold">AI Debate Studio</span>
             <span className="text-[9px] font-mono font-bold px-1 py-0.2 rounded bg-purple-900/80 text-purple-200">
               3-Agent

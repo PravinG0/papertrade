@@ -151,7 +151,7 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
       <div
-        className="relative w-full max-w-md max-h-[92vh] flex flex-col bg-[#0b0f19] border border-slate-800 rounded-2xl shadow-2xl shadow-black/80 overflow-hidden"
+        className="relative w-full max-w-md max-h-[92vh] flex flex-col bg-[#ffffff] border border-slate-800 rounded-2xl shadow-2xl shadow-black/80 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Glow Header Accent */}
@@ -164,7 +164,7 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
               <ShieldCheck className="w-4 h-4 text-cyan-400" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white tracking-wide flex items-center gap-1.5">
+              <h3 className="text-sm font-bold text-ink tracking-wide flex items-center gap-1.5">
                 TradeLab Authentication
                 <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800/60">
                   SQLite
@@ -177,7 +177,7 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-1 rounded-lg text-slate-400 hover:text-ink hover:bg-slate-800 transition-colors"
           >
             <X size={18} />
           </button>
@@ -232,7 +232,7 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
           {/* Beautiful OR Divider */}
           <div className="relative flex items-center justify-center my-4">
             <div className="border-t border-slate-800 w-full" />
-            <span className="bg-[#0b0f19] px-3 text-[11px] font-semibold text-slate-500 uppercase tracking-wider absolute">
+            <span className="bg-[#ffffff] px-3 text-[11px] font-semibold text-slate-500 uppercase tracking-wider absolute">
               OR
             </span>
           </div>
@@ -253,7 +253,7 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
                     value={usernameOrEmail}
                     onChange={(e) => setUsernameOrEmail(e.target.value)}
                     placeholder="Enter your username or email"
-                    className="w-full pl-9 pr-3 py-2 bg-slate-900/90 border border-slate-800 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+                    className="w-full pl-9 pr-3 py-2 bg-slate-900/90 border border-slate-800 rounded-xl text-sm text-ink placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
                   />
                 </div>
               </div>
@@ -272,7 +272,7 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Enter password"
-                    className="w-full pl-9 pr-3 py-2 bg-slate-900/90 border border-slate-800 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+                    className="w-full pl-9 pr-3 py-2 bg-slate-900/90 border border-slate-800 rounded-xl text-sm text-ink placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
                   />
                 </div>
               </div>
@@ -310,7 +310,7 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
                     value={regUsername}
                     onChange={(e) => setRegUsername(e.target.value)}
                     placeholder="Trader handle e.g. niftypro"
-                    className="w-full pl-9 pr-3 py-2 bg-slate-900/90 border border-slate-800 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+                    className="w-full pl-9 pr-3 py-2 bg-slate-900/90 border border-slate-800 rounded-xl text-sm text-ink placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
                   />
                 </div>
               </div>
@@ -329,7 +329,7 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
                     value={regEmail}
                     onChange={(e) => setRegEmail(e.target.value)}
                     placeholder="name@example.com"
-                    className="w-full pl-9 pr-3 py-2 bg-slate-900/90 border border-slate-800 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+                    className="w-full pl-9 pr-3 py-2 bg-slate-900/90 border border-slate-800 rounded-xl text-sm text-ink placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
                   />
                 </div>
               </div>
@@ -350,7 +350,7 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
                       value={regPassword}
                       onChange={(e) => setRegPassword(e.target.value)}
                       placeholder="Min 6 chars"
-                      className="w-full pl-8 pr-2.5 py-2 bg-slate-900/90 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                      className="w-full pl-8 pr-2.5 py-2 bg-slate-900/90 border border-slate-800 rounded-xl text-xs text-ink placeholder-slate-500 focus:outline-none focus:border-cyan-500"
                     />
                   </div>
                 </div>
@@ -370,7 +370,7 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
                       value={regConfirmPassword}
                       onChange={(e) => setRegConfirmPassword(e.target.value)}
                       placeholder="Repeat"
-                      className="w-full pl-8 pr-2.5 py-2 bg-slate-900/90 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                      className="w-full pl-8 pr-2.5 py-2 bg-slate-900/90 border border-slate-800 rounded-xl text-xs text-ink placeholder-slate-500 focus:outline-none focus:border-cyan-500"
                     />
                   </div>
                 </div>

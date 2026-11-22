@@ -47,13 +47,13 @@ export default function QuickScalperBar({
   };
 
   return (
-    <div className="bg-[#0b101d] border border-slate-800/90 rounded-xl p-2.5 shadow-lg select-none">
+    <div className="bg-[#ffffff] border border-slate-800/90 rounded-xl p-2.5 shadow-lg select-none">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-800/60">
         <div className="flex items-center gap-1.5">
           <div className="w-5 h-5 rounded bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
             <Flame size={12} />
           </div>
-          <span className="text-[11px] font-bold text-white uppercase tracking-wider">
+          <span className="text-[11px] font-bold text-ink uppercase tracking-wider">
             1-Click Scalper Dock
           </span>
           <span className="px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-300 border border-cyan-800 text-[10px] font-mono">
@@ -73,7 +73,7 @@ export default function QuickScalperBar({
                 className={`px-1 py-0.2 rounded font-mono font-bold transition-colors ${
                   slPoints === pts
                     ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-                    : 'text-slate-400 hover:text-white'
+                    : 'text-slate-400 hover:text-ink'
                 }`}
               >
                 {pts}p
@@ -91,7 +91,7 @@ export default function QuickScalperBar({
                 className={`px-1 py-0.2 rounded font-mono font-bold transition-colors ${
                   targetPoints === pts
                     ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                    : 'text-slate-400 hover:text-white'
+                    : 'text-slate-400 hover:text-ink'
                 }`}
               >
                 {pts}p

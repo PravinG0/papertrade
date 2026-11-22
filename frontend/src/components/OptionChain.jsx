@@ -222,9 +222,9 @@ export default function OptionChain({
   }, [chain]);
 
   return (
-    <div className="bg-[#0f172a] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full">
+    <div className="bg-[#ffffff] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full">
       {/* Controls Bar */}
-      <div className="p-3 bg-[#080c14] border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
+      <div className="p-3 bg-[#f4f6fa] border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
         {/* Left: Index selector & Expiry & Strikes count */}
         <div className="flex flex-wrap items-center gap-2">
           {/* Index Selector */}
@@ -312,7 +312,7 @@ export default function OptionChain({
                   className={`px-1.5 py-0.5 rounded text-[11px] font-mono font-bold transition-colors ${
                     strikeCount === cnt
                       ? 'bg-cyan-600 text-white'
-                      : 'text-slate-400 hover:text-white'
+                      : 'text-slate-400 hover:text-ink'
                   }`}
                 >
                   ±{cnt}
@@ -329,7 +329,7 @@ export default function OptionChain({
             <button
               onClick={() => setViewFilter('ALL')}
               className={`px-2 py-1 rounded font-semibold transition-all ${
-                viewFilter === 'ALL' ? 'bg-slate-700 text-white' : 'text-slate-400'
+                viewFilter === 'ALL' ? 'bg-slate-700 text-ink' : 'text-slate-400'
               }`}
             >
               All
@@ -396,7 +396,7 @@ export default function OptionChain({
       {/* Main Table */}
       <div className="flex-1 overflow-x-auto overflow-y-auto">
         <table data-advanced={advanced ? 'true' : 'false'} className="w-full border-collapse text-xs select-none">
-          <thead className="sticky top-0 z-20 bg-[#080c14] border-b border-slate-800 shadow-sm">
+          <thead className="sticky top-0 z-20 bg-[#f4f6fa] border-b border-slate-800 shadow-sm">
             {/* Top Super-headers */}
             <tr>
               {(viewFilter === 'ALL' || viewFilter === 'CALLS') && (
@@ -440,7 +440,7 @@ export default function OptionChain({
               )}
 
               {/* Strike Header */}
-              <th className="py-2 px-3 text-center font-bold text-white bg-slate-900 border-r border-slate-800">
+              <th className="py-2 px-3 text-center font-bold text-ink bg-slate-900 border-r border-slate-800">
                 Strike
               </th>
 
@@ -796,7 +796,7 @@ export default function OptionChain({
 
       {/* Floating Strategy Basket Dock */}
       {basketLegs.length > 0 && (
-        <div className="p-2.5 bg-[#0b101d] border-t border-purple-800/60 flex flex-wrap items-center justify-between gap-2 shadow-2xl animate-fadeIn">
+        <div className="p-2.5 bg-[#ffffff] border-t border-purple-800/60 flex flex-wrap items-center justify-between gap-2 shadow-2xl animate-fadeIn">
           <div className="flex items-center gap-2">
             <span className="px-2 py-0.5 rounded bg-purple-600 text-white text-[11px] font-bold font-mono flex items-center gap-1">
               <ShoppingBag size={11} />
@@ -815,7 +815,7 @@ export default function OptionChain({
                   {leg.side} {leg.strike} {leg.option_type} @ ₹{leg.price}
                   <button
                     onClick={() => removeBasketLeg(i)}
-                    className="text-slate-400 hover:text-white ml-0.5 text-xs"
+                    className="text-slate-400 hover:text-ink ml-0.5 text-xs"
                     title="Remove leg"
                   >
                     ×
@@ -845,7 +845,7 @@ export default function OptionChain({
       )}
 
       {/* Footer Info Ribbon */}
-      <div className="px-3 py-1.5 bg-[#080c14] border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
+      <div className="px-3 py-1.5 bg-[#f4f6fa] border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1 text-amber-400">
             <span className="w-2.5 h-2.5 rounded-sm bg-amber-500/30 border border-amber-500/50 inline-block" />

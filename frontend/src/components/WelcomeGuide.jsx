@@ -34,13 +34,13 @@ export default function WelcomeGuide({ onOpenDebate = () => {}, marketOpen = tru
       <button
         onClick={close}
         aria-label="Dismiss guide"
-        className="absolute top-3 right-3 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+        className="absolute top-3 right-3 text-slate-400 hover:text-ink p-1 rounded-lg hover:bg-slate-800"
       >
         <X size={16} />
       </button>
 
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 pr-8">
-        <h2 className="text-sm font-bold text-white">Welcome to The TradeLab</h2>
+        <h2 className="text-sm font-bold text-ink">Welcome to The TradeLab</h2>
         <p className="text-xs text-slate-400">
           Practice index-options trading with live Angel One prices. No real money involved.
         </p>

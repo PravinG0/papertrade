@@ -58,19 +58,19 @@ export default function PositionSizeModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-fade-in select-none">
-      <div className="bg-[#0f172a] border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col font-sans">
+      <div className="bg-[#ffffff] border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col font-sans">
         {/* Header */}
-        <div className="p-4 bg-[#080c14] border-b border-slate-800 flex items-center justify-between">
+        <div className="p-4 bg-[#f4f6fa] border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-cyan-600/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
               <Calculator size={18} />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider">Position Size & Risk Calculator</h3>
+              <h3 className="text-sm font-bold text-ink uppercase tracking-wider">Position Size & Risk Calculator</h3>
               <p className="text-[11px] text-slate-400">TradeLab Capital Protection Tool</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">
+          <button onClick={onClose} className="p-1 rounded-lg text-slate-400 hover:text-ink hover:bg-slate-800 transition-colors">
             <X size={18} />
           </button>
         </div>
@@ -84,7 +84,7 @@ export default function PositionSizeModal({
               <select
                 value={indexSymbol}
                 onChange={(e) => setIndexSymbol(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-bold focus:outline-none focus:border-cyan-500"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-ink font-bold focus:outline-none focus:border-cyan-500"
               >
                 <option value="NIFTY">NIFTY 50 (Lot 25)</option>
                 <option value="BANKNIFTY">BANK NIFTY (Lot 15)</option>
@@ -136,7 +136,7 @@ export default function PositionSizeModal({
                 step="0.5"
                 value={entryPrice}
                 onChange={(e) => setEntryPrice(Math.max(1, parseFloat(e.target.value) || 0))}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-mono font-bold focus:outline-none focus:border-cyan-500"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-ink font-mono font-bold focus:outline-none focus:border-cyan-500"
               />
             </div>
 
@@ -174,7 +174,7 @@ export default function PositionSizeModal({
               </div>
               <div className="text-right">
                 <span className="text-[10px] uppercase font-bold text-slate-400 block">Capital Required</span>
-                <span className="text-sm font-bold font-mono text-white">
+                <span className="text-sm font-bold font-mono text-ink">
                   ₹{calculations.totalCapitalRequired.toLocaleString('en-IN')}
                 </span>
               </div>
@@ -198,7 +198,7 @@ export default function PositionSizeModal({
         </div>
 
         {/* Footer Actions */}
-        <div className="p-4 bg-[#080c14] border-t border-slate-800 flex items-center justify-end gap-2">
+        <div className="p-4 bg-[#f4f6fa] border-t border-slate-800 flex items-center justify-end gap-2">
           <button
             onClick={onClose}
             className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"
