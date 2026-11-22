@@ -8,7 +8,7 @@ import {
   CrosshairMode,
 } from 'lightweight-charts';
 import { getCandles } from '../api';
-import { RefreshCw, Eye, EyeOff, Columns, Maximize2 } from 'lucide-react';
+import { RefreshCw, Eye, EyeOff, Columns, X } from 'lucide-react';
 
 const TIMEFRAMES = [
   { label: '1m', interval: '1m', range: '1d' },
@@ -479,9 +479,26 @@ export default function TradingChart({
   onPriceUpdate = () => {},
 }) {
   const [dualSplit, setDualSplit] = useState(false);
+  const [lastSpot, setLastSpot] = useState(null);
+  const [atmSide, setAtmSide] = useState('CE');
 
-  // If a contract is selected, allow auto-enabling dual split so user sees spot on left, contract on right
-  const effectiveContract = contract;
+  const handlePrice = (p) => {
+    if (typeof p === 'number' && !isNaN(p)) setLastSpot(p);
+    onPriceUpdate(p);
+  };
+
+  // Compare view: a picked contract, otherwise the real ATM strike from the live spot price
+  const STEP = { NIFTY: 50, FINNIFTY: 50, BANKNIFTY: 100, SENSEX: 100 };
+  const atmStrike = lastSpot ? Math.round(lastSpot / (STEP[selectedIndex] || 50)) * (STEP[selectedIndex] || 50) : null;
+  const compareContract = contract || (atmStrike ? { strike: atmStrike, option_type: atmSide } : null);
+
+  // Close the compare view with Escape
+  useEffect(() => {
+    if (!dualSplit) return undefined;
+    const onKey = (e) => e.key === 'Escape' && setDualSplit(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dualSplit]);
 
   return (
     <div className="bg-[#ffffff] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full">
@@ -528,67 +545,99 @@ export default function TradingChart({
                 ? 'bg-cyan-600 text-white border-cyan-500 shadow-sm'
                 : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
             }`}
-            title="Toggle Dual Split Chart View (Spot Index + Option Strike)"
+            title="Compare the index chart with the ATM option chart, side by side"
           >
-            {dualSplit ? <Maximize2 size={12} /> : <Columns size={12} />}
-            <span>{dualSplit ? 'Single Chart' : 'Dual Split'}</span>
+            <Columns size={12} />
+            <span>Compare</span>
           </button>
         </div>
       </div>
 
       {/* Charts Area */}
-      <div className="flex-1 p-1.5 flex gap-1.5 overflow-hidden min-h-[260px]">
-        {/* View 1: Single Full Chart */}
-        {!dualSplit ? (
-          <div className="flex-1 h-full">
-            <ChartPane
-              title={
-                contract
-                  ? `${selectedIndex} ${contract.strike} ${contract.option_type}`
-                  : `${selectedIndex} Spot`
-              }
-              symbol={selectedIndex}
-              contract={contract}
-              initialTfIndex={2} // 15m default
-              onPriceUpdate={onPriceUpdate}
-              badgeColor={contract ? 'amber' : 'cyan'}
-            />
-          </div>
-        ) : (
-          /* View 2: Dual Split Screen (Left: Spot Index, Right: Option Strike) */
-          <>
-            <div className="flex-1 h-full min-w-0">
-              <ChartPane
-                title={`${selectedIndex} Spot (5m)`}
-                symbol={selectedIndex}
-                contract={null}
-                initialTfIndex={1} // 5m default for Spot
-                onPriceUpdate={onPriceUpdate}
-                badgeColor="cyan"
-              />
-            </div>
-            <div className="flex-1 h-full min-w-0">
-              <ChartPane
-                title={
-                  effectiveContract
-                    ? `${selectedIndex} ${effectiveContract.strike} ${effectiveContract.option_type}`
-                    : `${selectedIndex} ATM Option (1m)`
-                }
-                symbol={selectedIndex}
-                contract={
-                  effectiveContract || {
-                    strike: selectedIndex === 'BANKNIFTY' ? 50300 : 23550,
-                    option_type: 'CE',
-                    ltp: 135.0,
-                  }
-                }
-                initialTfIndex={0} // 1m default for Strike
-                badgeColor="amber"
-              />
-            </div>
-          </>
-        )}
+      <div className="flex-1 p-1.5 flex overflow-hidden min-h-[260px]">
+        <div className="flex-1 h-full min-w-0">
+          <ChartPane
+            title={
+              contract
+                ? `${selectedIndex} ${contract.strike} ${contract.option_type}`
+                : `${selectedIndex} Spot`
+            }
+            symbol={selectedIndex}
+            contract={contract}
+            initialTfIndex={2} // 15m default
+            onPriceUpdate={handlePrice}
+            badgeColor={contract ? 'amber' : 'cyan'}
+          />
+        </div>
       </div>
+
+      {/* Compare view: full-screen sheet, side by side on wide screens, stacked on phones */}
+      {dualSplit && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4"
+          role="dialog"
+          aria-label="Compare index and ATM option charts"
+          onClick={(e) => e.target === e.currentTarget && setDualSplit(false)}
+        >
+          <div className="bg-white w-full h-[94vh] sm:h-[88vh] sm:max-w-6xl rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+            <div className="px-3 sm:px-4 py-2.5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
+                <h3 className="text-sm font-bold text-ink">Compare charts</h3>
+                <span className="text-xs text-slate-400">{selectedIndex} index vs option</span>
+                {!contract && (
+                  <div className="flex items-center bg-slate-900 p-0.5 rounded-lg border border-slate-800 text-xs">
+                    {['CE', 'PE'].map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => setAtmSide(t)}
+                        className={`px-3 py-1.5 rounded font-bold ${atmSide === t ? 'bg-cyan-600 text-white' : 'text-slate-400'}`}
+                      >
+                        ATM {t}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => setDualSplit(false)}
+                aria-label="Close compare view"
+                className="shrink-0 p-2 rounded-lg text-slate-400 hover:text-ink hover:bg-slate-800"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-2 flex flex-col md:flex-row gap-2">
+              <div className="flex-none h-[340px] md:h-auto md:flex-1 min-w-0">
+                <ChartPane
+                  title={`${selectedIndex} Spot (5m)`}
+                  symbol={selectedIndex}
+                  contract={null}
+                  initialTfIndex={1}
+                  onPriceUpdate={handlePrice}
+                  badgeColor="cyan"
+                />
+              </div>
+              <div className="flex-none h-[340px] md:h-auto md:flex-1 min-w-0">
+                {compareContract ? (
+                  <ChartPane
+                    key={`${compareContract.strike}-${compareContract.option_type}`}
+                    title={`${selectedIndex} ${compareContract.strike} ${compareContract.option_type}`}
+                    symbol={selectedIndex}
+                    contract={compareContract}
+                    initialTfIndex={0}
+                    badgeColor="amber"
+                  />
+                ) : (
+                  <div className="h-full flex items-center justify-center text-xs text-slate-400 border border-dashed border-slate-300 rounded-xl">
+                    Waiting for the live index price to pick the ATM strike...
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
