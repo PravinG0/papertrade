@@ -238,11 +238,19 @@ async def get_optional_user(
         if not sub:
             return None
         user_id = int(sub)
-        stmt = select(UserModel).where(UserModel.id == user_id)
-        user = (await session.execute(stmt)).scalars().first()
-        return user
     except Exception:
-        return None
+        return None  # bad / expired token -> treat as guest
+
+    try:
+        stmt = select(UserModel).where(UserModel.id == user_id)
+        return (await session.execute(stmt)).scalars().first()
+    except Exception as exc:
+        # A database hiccup must NOT silently turn a signed-in user into an empty guest account
+        logger.error("get_optional_user DB lookup failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please retry.",
+        )
 
 
 # ── Auth APIRouter ────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   RefreshCw,
   SlidersHorizontal,
@@ -26,6 +26,9 @@ export default function OptionChain({
   onExecuteBasket = null,
 }) {
   const [chain, setChain] = useState([]);
+  const [chainMeta, setChainMeta] = useState({ data_source: null, lot_size: null, vix: null });
+  const spotRef = useRef(spotPrice);
+  spotRef.current = spotPrice;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [strikeCount, setStrikeCount] = useState(10);
@@ -58,7 +61,7 @@ export default function OptionChain({
     setExecutingBasket(true);
     try {
       if (onExecuteBasket) {
-        await onExecuteBasket(basketLegs);
+        await onExecuteBasket(basketLegs.map((l) => ({ ...l, expiry: selectedExpiry })));
       }
       setBasketLegs([]);
       setBasketMode(false);
@@ -67,7 +70,8 @@ export default function OptionChain({
     }
   };
 
-  const lotSize = selectedIndex === 'BANKNIFTY' ? 15 : selectedIndex === 'SENSEX' ? 10 : 25;
+  const lotSize =
+    chainMeta.lot_size || (selectedIndex === 'BANKNIFTY' ? 30 : selectedIndex === 'SENSEX' ? 20 : 65);
   const strikeStep = selectedIndex === 'BANKNIFTY' || selectedIndex === 'SENSEX' ? 100 : 50;
 
   // Load available expiries
@@ -121,11 +125,17 @@ export default function OptionChain({
       const data = res.data?.chain || res.data?.data || res.data || [];
       if (Array.isArray(data)) {
         setChain(data);
+        setChainMeta({
+          data_source: res.data?.data_source || 'live',
+          lot_size: res.data?.lot_size || null,
+          vix: res.data?.vix ?? null,
+        });
       }
     } catch (err) {
       console.warn('Failed to fetch option chain from backend, generating fallback strikes:', err);
       // Generate synthetic option chain around spot price so UI is always interactive
-      const currentSpot = spotPrice || (selectedIndex === 'BANKNIFTY' ? 50200 : 23500);
+      setChainMeta((m) => ({ ...m, data_source: 'offline' }));
+      const currentSpot = spotRef.current || (selectedIndex === 'BANKNIFTY' ? 50200 : 23500);
       const atmStrike = Math.round(currentSpot / strikeStep) * strikeStep;
       const count = Number(strikeCount) || 10;
       const synthetic = [];
@@ -168,7 +178,7 @@ export default function OptionChain({
     } finally {
       setLoading(false);
     }
-  }, [selectedIndex, strikeCount, selectedExpiry, spotPrice, strikeStep]);
+  }, [selectedIndex, strikeCount, selectedExpiry, strikeStep]);
 
   useEffect(() => {
     fetchChain();
@@ -236,6 +246,24 @@ export default function OptionChain({
               ))}
             </select>
           </div>
+
+          {/* Data source badge: tells you whether prices are real Angel One quotes */}
+          {chainMeta.data_source && chainMeta.data_source !== 'live' && (
+            <div
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wide bg-amber-950/70 border border-amber-600/60 text-amber-300"
+              title="These prices are simulated, not real Angel One quotes. They will NOT match your broker."
+            >
+              ⚠ {chainMeta.data_source === 'offline' ? 'Offline demo data' : 'Simulated prices'}
+            </div>
+          )}
+          {chainMeta.data_source === 'live' && (
+            <div
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wide bg-emerald-950/60 border border-emerald-700/50 text-emerald-300"
+              title="Real Angel One quotes"
+            >
+              ● Live{chainMeta.vix ? ` · VIX ${chainMeta.vix}` : ''}
+            </div>
+          )}
 
           {/* Strike Count Selector */}
           <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 px-2 py-1 rounded-lg text-xs">
@@ -331,7 +359,7 @@ export default function OptionChain({
 
       {/* Main Table */}
       <div className="flex-1 overflow-x-auto overflow-y-auto">
-        <table className="w-full min-w-[850px] border-collapse text-xs select-none">
+        <table className="w-full sm:min-w-[850px] border-collapse text-xs select-none">
           <thead className="sticky top-0 z-20 bg-[#080c14] border-b border-slate-800 shadow-sm">
             {/* Top Super-headers */}
             <tr>
@@ -363,13 +391,13 @@ export default function OptionChain({
               {/* Calls Headers */}
               {(viewFilter === 'ALL' || viewFilter === 'CALLS') && (
                 <>
-                  <th className="py-2 px-2 text-right">OI (Bar)</th>
-                  <th className="py-2 px-2 text-right">Vol</th>
-                  <th className="py-2 px-2 text-right">IV</th>
-                  <th className="py-2 px-2 text-right">Delta</th>
+                  <th className="hidden sm:table-cell py-2 px-2 text-right">OI (Bar)</th>
+                  <th className="hidden sm:table-cell py-2 px-2 text-right">Vol</th>
+                  <th className="hidden sm:table-cell py-2 px-2 text-right">IV</th>
+                  <th className="hidden sm:table-cell py-2 px-2 text-right">Delta</th>
                   {showTheta && <th className="py-2 px-2 text-right text-amber-400">θ Theta</th>}
-                  <th className="py-2 px-2 text-right">Bid</th>
-                  <th className="py-2 px-2 text-right">Ask</th>
+                  <th className="hidden sm:table-cell py-2 px-2 text-right">Bid</th>
+                  <th className="hidden sm:table-cell py-2 px-2 text-right">Ask</th>
                   <th className="py-2 px-2 text-right font-bold text-slate-200">LTP</th>
                   <th className="py-2 px-2 text-center border-r border-slate-800">Action</th>
                 </>
@@ -385,13 +413,13 @@ export default function OptionChain({
                 <>
                   <th className="py-2 px-2 text-center">Action</th>
                   <th className="py-2 px-2 text-left font-bold text-slate-200">LTP</th>
-                  <th className="py-2 px-2 text-left">Bid</th>
-                  <th className="py-2 px-2 text-left">Ask</th>
-                  <th className="py-2 px-2 text-left">Delta</th>
+                  <th className="hidden sm:table-cell py-2 px-2 text-left">Bid</th>
+                  <th className="hidden sm:table-cell py-2 px-2 text-left">Ask</th>
+                  <th className="hidden sm:table-cell py-2 px-2 text-left">Delta</th>
                   {showTheta && <th className="py-2 px-2 text-left text-amber-400">θ Theta</th>}
-                  <th className="py-2 px-2 text-left">IV</th>
-                  <th className="py-2 px-2 text-left">Vol</th>
-                  <th className="py-2 px-2 text-left">OI (Bar)</th>
+                  <th className="hidden sm:table-cell py-2 px-2 text-left">IV</th>
+                  <th className="hidden sm:table-cell py-2 px-2 text-left">Vol</th>
+                  <th className="hidden sm:table-cell py-2 px-2 text-left">OI (Bar)</th>
                 </>
               )}
             </tr>
@@ -444,7 +472,7 @@ export default function OptionChain({
                       <>
                         {/* Call OI with visual mini bar */}
                         <td
-                          className={`py-1.5 px-2 text-right relative overflow-hidden ${
+                          className={`hidden sm:table-cell py-1.5 px-2 text-right relative overflow-hidden ${
                             isCeItm ? 'bg-amber-500/[0.07]' : ''
                           }`}
                         >
@@ -458,17 +486,17 @@ export default function OptionChain({
                         </td>
 
                         {/* Call Volume */}
-                        <td className={`py-1.5 px-2 text-right text-slate-400 ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
+                        <td className={`hidden sm:table-cell py-1.5 px-2 text-right text-slate-400 ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
                           {ce.volume ? (ce.volume / 1000).toFixed(1) + 'k' : '—'}
                         </td>
 
                         {/* Call IV */}
-                        <td className={`py-1.5 px-2 text-right text-slate-400 ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
+                        <td className={`hidden sm:table-cell py-1.5 px-2 text-right text-slate-400 ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
                           {ceIv != null ? ceIv : '—'}
                         </td>
 
                         {/* Call Delta */}
-                        <td className={`py-1.5 px-2 text-right text-emerald-400 font-medium ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
+                        <td className={`hidden sm:table-cell py-1.5 px-2 text-right text-emerald-400 font-medium ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
                           {ceDelta != null ? ceDelta : '—'}
                         </td>
 
@@ -480,12 +508,12 @@ export default function OptionChain({
                         )}
 
                         {/* Call Bid */}
-                        <td className={`py-1.5 px-2 text-right text-slate-400 ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
+                        <td className={`hidden sm:table-cell py-1.5 px-2 text-right text-slate-400 ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
                           {ce.bid != null ? Number(ce.bid).toFixed(2) : '—'}
                         </td>
 
                         {/* Call Ask */}
-                        <td className={`py-1.5 px-2 text-right text-slate-400 ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
+                        <td className={`hidden sm:table-cell py-1.5 px-2 text-right text-slate-400 ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
                           {ce.ask != null ? Number(ce.ask).toFixed(2) : '—'}
                         </td>
 
@@ -538,6 +566,7 @@ export default function OptionChain({
                                       bid: ce.bid || ceLtp,
                                       ask: ce.ask || ceLtp,
                                       lotSize,
+                                      expiry: selectedExpiry,
                                     })
                                   }
                                   className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow transition-all active:scale-95"
@@ -556,6 +585,7 @@ export default function OptionChain({
                                       bid: ce.bid || ceLtp,
                                       ask: ce.ask || ceLtp,
                                       lotSize,
+                                      expiry: selectedExpiry,
                                     })
                                   }
                                   className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-600/80 hover:bg-rose-500 text-white shadow transition-all active:scale-95"
@@ -624,6 +654,7 @@ export default function OptionChain({
                                       bid: pe.bid || peLtp,
                                       ask: pe.ask || peLtp,
                                       lotSize,
+                                      expiry: selectedExpiry,
                                     })
                                   }
                                   className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow transition-all active:scale-95"
@@ -642,6 +673,7 @@ export default function OptionChain({
                                       bid: pe.bid || peLtp,
                                       ask: pe.ask || peLtp,
                                       lotSize,
+                                      expiry: selectedExpiry,
                                     })
                                   }
                                   className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-600/80 hover:bg-rose-500 text-white shadow transition-all active:scale-95"
@@ -671,12 +703,12 @@ export default function OptionChain({
                         </td>
 
                         {/* Put Bid */}
-                        <td className={`py-1.5 px-2 text-left text-slate-400 ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
+                        <td className={`hidden sm:table-cell py-1.5 px-2 text-left text-slate-400 ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
                           {pe.bid != null ? Number(pe.bid).toFixed(2) : '—'}
                         </td>
 
                         {/* Put Ask */}
-                        <td className={`py-1.5 px-2 text-left text-slate-400 ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
+                        <td className={`hidden sm:table-cell py-1.5 px-2 text-left text-slate-400 ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
                           {pe.ask != null ? Number(pe.ask).toFixed(2) : '—'}
                         </td>
 
@@ -688,23 +720,23 @@ export default function OptionChain({
                         )}
 
                         {/* Put Delta */}
-                        <td className={`py-1.5 px-2 text-left text-rose-400 font-medium ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
+                        <td className={`hidden sm:table-cell py-1.5 px-2 text-left text-rose-400 font-medium ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
                           {peDelta != null ? peDelta : '—'}
                         </td>
 
                         {/* Put IV */}
-                        <td className={`py-1.5 px-2 text-left text-slate-400 ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
+                        <td className={`hidden sm:table-cell py-1.5 px-2 text-left text-slate-400 ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
                           {peIv != null ? peIv : '—'}
                         </td>
 
                         {/* Put Volume */}
-                        <td className={`py-1.5 px-2 text-left text-slate-400 ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
+                        <td className={`hidden sm:table-cell py-1.5 px-2 text-left text-slate-400 ${isPeItm ? 'bg-amber-500/[0.07]' : ''}`}>
                           {pe.volume ? (pe.volume / 1000).toFixed(1) + 'k' : '—'}
                         </td>
 
                         {/* Put OI with visual mini bar */}
                         <td
-                          className={`py-1.5 px-2 text-left relative overflow-hidden ${
+                          className={`hidden sm:table-cell py-1.5 px-2 text-left relative overflow-hidden ${
                             isPeItm ? 'bg-amber-500/[0.07]' : ''
                           }`}
                         >

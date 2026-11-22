@@ -67,6 +67,7 @@ export default function App() {
     progress_percent: 0,
   });
   const [showReplayBar, setShowReplayBar] = useState(false);
+  const [feedInfo, setFeedInfo] = useState({ source: 'live', marketOpen: true });
 
   // Auth state & context
   const { user, token, loading: authLoading } = useAuth();
@@ -142,6 +143,12 @@ export default function App() {
         });
       } else if (raw && typeof raw === 'object') {
         Object.assign(map, raw);
+      }
+
+      if (Array.isArray(raw) && raw.length > 0) {
+        const sources = raw.map((i) => i?.source).filter(Boolean);
+        const source = sources.includes('simulated') ? 'simulated' : sources.includes('stale') ? 'stale' : 'live';
+        setFeedInfo((f) => (f.source === source ? f : { ...f, source }));
       }
 
       if (Object.keys(map).length > 0) {
@@ -336,6 +343,12 @@ export default function App() {
     syncMarketIndices();
     syncTradingState();
     syncReplayState();
+    const refreshStatus = () =>
+      getStatus()
+        .then((r) => setFeedInfo((f) => ({ ...f, marketOpen: Boolean(r.data?.market_open) })))
+        .catch(() => {});
+    refreshStatus();
+    const statusTimer = setInterval(refreshStatus, 30000);
 
     const interval = setInterval(() => {
       syncMarketIndices();
@@ -343,7 +356,10 @@ export default function App() {
       syncReplayState();
     }, 4000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      clearInterval(statusTimer);
+    };
   }, [syncMarketIndices, syncTradingState, syncReplayState]);
 
   // Order Placement Handler
@@ -501,6 +517,7 @@ export default function App() {
         indices={indices}
         portfolio={portfolio}
         replayState={replayState}
+        feedInfo={feedInfo}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         onResetPortfolio={handleResetPortfolio}
@@ -550,6 +567,7 @@ export default function App() {
                       await handlePlaceOrder({
                         symbol: `${selectedIndex}${leg.strike}${leg.option_type}`,
                         underlying: selectedIndex,
+                        expiry: leg.expiry || null,
                         strike: Number(leg.strike),
                         option_type: leg.option_type,
                         side: leg.side,
@@ -676,6 +694,10 @@ export default function App() {
               selectedIndex={selectedIndex}
               onSelectIndex={(idx) => setSelectedIndex(idx)}
               onExecuteTrade={handleExecuteDebateTrade}
+              onTradeChanged={(msg) => {
+                if (msg) showToast(msg, 'success');
+                syncTradingState();
+              }}
             />
           </div>
         )}

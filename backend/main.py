@@ -17,6 +17,7 @@ import logging
 import os
 from pathlib import Path
 import sys
+from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
@@ -39,6 +40,7 @@ from keep_alive import keep_alive_manager
 from paper_engine import paper_engine
 from replay_engine import replay_engine
 from scheduler import get_scheduler
+from scrip_master import scrip_master
 
 logger = logging.getLogger("tradelab_main")
 logging.basicConfig(level=logging.INFO)
@@ -75,37 +77,56 @@ ws_manager = ConnectionManager()
 
 
 async def _periodic_mtm_loop() -> None:
-    """Periodically update paper positions MTM and verify auto-squareoff."""
+    """Periodically update paper positions MTM (with REAL Angel One option prices) and square-off."""
     while True:
         try:
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(0.5)
             # Check 15:15 IST MIS Auto Square-off
             await paper_engine.check_intraday_squareoff()
+
+            has_work = bool(paper_engine.active_positions or paper_engine.active_orders)
+            if not has_work and not ws_manager.active_connections:
+                await asyncio.sleep(1.5)
+                continue
 
             # Always fetch latest spots for WebSocket streaming and MTM
             spots = await angel_service.get_spot_indices()
 
             # Only update live prices if replay mode is not active and positions exist
-            if not replay_engine.is_replaying and (paper_engine.active_positions or paper_engine.active_orders):
+            if not replay_engine.is_replaying and has_work:
                 quotes_dict: dict[str, float] = {}
+                live_feed = angel_service.data_source == "live"
 
-                for s in spots:
-                    sym = s["symbol"]
-                    spot_p = float(s["ltp"])
-                    quotes_dict[sym] = spot_p
-                    spec = INDEX_CONFIG.get(sym, INDEX_CONFIG["NIFTY"])
-                    step = spec["strike_step"]
-                    atm = int(round(spot_p / step) * step)
-
-                    # Compute nearby strikes
-                    for offset in range(-8, 9):
-                        k = atm + (offset * step)
-                        ce_p = BlackScholesEngine.calculate_price(spot_p, k, 3.0 / 365.0, iv=0.15, option_type="CE")
-                        pe_p = BlackScholesEngine.calculate_price(spot_p, k, 3.0 / 365.0, iv=0.15, option_type="PE")
-                        quotes_dict[f"{k}CE"] = ce_p
-                        quotes_dict[f"{k}PE"] = pe_p
-                        quotes_dict[f"{sym}{k}CE"] = ce_p
-                        quotes_dict[f"{sym}{k}PE"] = pe_p
+                if live_feed:
+                    # REAL option LTPs straight from Angel One (matches broker terminal)
+                    legs = [
+                        {
+                            "symbol": x["symbol"],
+                            "underlying": x.get("underlying", "NIFTY"),
+                            "strike": x["strike"],
+                            "option_type": x["option_type"],
+                        }
+                        for x in list(paper_engine.active_positions.values())
+                        + list(paper_engine.active_orders.values())
+                    ]
+                    quotes_dict.update(await angel_service.get_option_ltps(legs))
+                else:
+                    # Offline / dev mode only: theoretical Black-Scholes prices
+                    for s in spots:
+                        sym = s["symbol"]
+                        spot_p = float(s["ltp"])
+                        quotes_dict[sym] = spot_p
+                        spec = INDEX_CONFIG.get(sym, INDEX_CONFIG["NIFTY"])
+                        step = spec["strike_step"]
+                        atm = int(round(spot_p / step) * step)
+                        for offset in range(-8, 9):
+                            k = atm + (offset * step)
+                            ce_p = BlackScholesEngine.calculate_price(spot_p, k, 3.0 / 365.0, iv=0.15, option_type="CE")
+                            pe_p = BlackScholesEngine.calculate_price(spot_p, k, 3.0 / 365.0, iv=0.15, option_type="PE")
+                            quotes_dict[f"{k}CE"] = ce_p
+                            quotes_dict[f"{k}PE"] = pe_p
+                            quotes_dict[f"{sym}{k}CE"] = ce_p
+                            quotes_dict[f"{sym}{k}PE"] = pe_p
 
                 await paper_engine.update_market_prices(quotes_dict)
 
@@ -119,7 +140,8 @@ async def _periodic_mtm_loop() -> None:
         except asyncio.CancelledError:
             break
         except Exception as exc:
-            logger.debug("Error in periodic MTM loop: %s", exc)
+            logger.warning("Error in periodic MTM loop: %s", exc)
+            await asyncio.sleep(2.0)
 
 
 @asynccontextmanager
@@ -130,8 +152,12 @@ async def lifespan(app: FastAPI):
     await init_db()
     # Restore active paper positions from SQLite into memory
     await paper_engine.restore_from_db()
+    # Restore AI debate history from the database and resume the auto-debate scheduler if it was on
+    await debate_engine.load_history()
+    await get_scheduler().restore()
     # Attempt initial auth
     asyncio.create_task(angel_service.authenticate())
+    asyncio.create_task(angel_service.ensure_contracts())
     _mtm_task = asyncio.create_task(_periodic_mtm_loop())
     if getattr(settings, "ENABLE_KEEP_ALIVE", True):
         asyncio.create_task(keep_alive_manager.start())
@@ -143,7 +169,7 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Error stopping keep-alive service: %s", exc)
     try:
-        await get_scheduler().stop()
+        await get_scheduler().shutdown()
     except Exception as exc:
         logger.warning("Error stopping scheduler on shutdown: %s", exc)
     await angel_service.close()
@@ -191,6 +217,9 @@ class OrderCreateRequest(BaseModel):
     stop_loss: Optional[float] = Field(default=None, description="Optional stop loss level")
     target: Optional[float] = Field(default=None, description="Optional profit target level")
     current_ltp: Optional[float] = Field(default=None, description="Current LTP estimate")
+    expiry: Optional[str] = Field(default=None, description="Expiry ISO date (YYYY-MM-DD); nearest if omitted")
+    stop_loss_pct: Optional[float] = Field(default=None, description="SL as % below the live fill price")
+    target_pct: Optional[float] = Field(default=None, description="Target as % above the live fill price")
 
 
 class UpdateSLRequest(BaseModel):
@@ -239,6 +268,8 @@ class SchedulerStartRequest(BaseModel):
     interval_minutes: int = Field(default=5, description="Interval in minutes: 3, 5, 10, or 15")
     symbol: str = Field(default="NIFTY", description="Underlying index: NIFTY or BANKNIFTY")
     auto_execute: bool = Field(default=False, description="Auto-execute Judge trades if confidence >= 70%")
+    market_hours_only: bool = Field(default=True, description="Only debate 09:15-15:30 IST on weekdays")
+    lots: int = Field(default=1, ge=1, le=50, description="Lots per auto-executed trade")
 
 
 # ── Real-Time WebSocket Terminal Feed ────────────────────────────────────────
@@ -310,6 +341,13 @@ async def trigger_manual_keep_alive_ping():
     return await keep_alive_manager.ping_once()
 
 
+def _is_market_open() -> bool:
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    if now.weekday() >= 5:
+        return False
+    return (now.hour, now.minute) >= (9, 15) and (now.hour, now.minute) < (15, 30)
+
+
 @app.get("/api/status")
 async def get_system_status():
     """Return platform and Angel One connection health status."""
@@ -318,6 +356,9 @@ async def get_system_status():
     return {
         "status": "ONLINE",
         "angel_one_connected": angel_configured,
+        "data_source": angel_service.data_source,
+        "vix": angel_service.vix,
+        "market_open": _is_market_open(),
         "mode": "REPLAY" if replay_state["is_replaying"] else "LIVE",
         "replay_active": replay_state["is_replaying"],
         "virtual_capital": settings.VIRTUAL_STARTING_CAPITAL,
@@ -372,7 +413,19 @@ async def get_candles(
     else:
         candles = await angel_service.get_candles(symbol=symbol, interval=interval, range_period=range_period)
 
-    # If option strike chart requested, translate spot candles to option contract candles via Black-Scholes
+    # Option contract chart: use the contract's REAL Angel One candles when available
+    if strike and option_type and not replay_engine.is_replaying:
+        await angel_service.ensure_contracts()
+        norm = normalize_index_symbol(symbol)
+        exps = scrip_master.expiries(norm)
+        c = scrip_master.contract(norm, exps[0], int(strike), option_type.upper()) if exps else None
+        if c:
+            real = await angel_service.get_candles(
+                symbol=symbol, interval=interval, range_period=range_period, contract=c)
+            if real:
+                return real
+
+    # Offline fallback: translate spot candles to option candles via Black-Scholes
     if strike and option_type:
         from greeks import BlackScholesEngine
         opt_type = option_type.upper()
@@ -398,6 +451,7 @@ async def get_candles(
 @app.get("/api/expiries")
 async def get_expiries(symbol: str = Query(default="NIFTY")):
     """Return list of upcoming weekly and monthly expiry dates."""
+    await angel_service.ensure_contracts()
     return angel_service.get_expiries(symbol=symbol)
 
 
@@ -452,6 +506,32 @@ async def place_paper_order(order: OrderCreateRequest, current_user: Optional[Us
             opt_type = order_data.get("option_type", "CE")
             calc_ltp = BlackScholesEngine.calculate_price(spot, strike, 3.0 / 365.0, iv=0.15, option_type=opt_type)
             order_data["current_ltp"] = calc_ltp
+
+    if not replay_engine.is_replaying:
+        quote = await angel_service.get_option_quote(
+            order_data.get("underlying", "NIFTY"),
+            order_data.get("strike", 0),
+            order_data.get("option_type", "CE"),
+            expiry=order_data.get("expiry"),
+        )
+        if quote:
+            # Use the exchange trading symbol and the live Angel One price (not the client's guess)
+            order_data["symbol"] = quote["symbol"]
+            if str(order_data.get("order_type", "MARKET")).upper() == "MARKET":
+                order_data["current_ltp"] = quote["ltp"]
+                order_data["price"] = quote["ltp"]
+        elif angel_service.data_source == "live" and str(order_data.get("order_type", "MARKET")).upper() == "MARKET":
+            raise HTTPException(
+                status_code=503,
+                detail="Live option price unavailable for this contract right now. Please retry in a moment.",
+            )
+
+    fill_ref = float(order_data.get("current_ltp") or order_data.get("price") or 0)
+    if fill_ref > 0 and str(order_data.get("side", "BUY")).upper() == "BUY":
+        if order.stop_loss_pct and not order_data.get("stop_loss"):
+            order_data["stop_loss"] = round(fill_ref * (1 - order.stop_loss_pct / 100.0), 2)
+        if order.target_pct and not order_data.get("target"):
+            order_data["target"] = round(fill_ref * (1 + order.target_pct / 100.0), 2)
 
     result = await paper_engine.place_order(order_data, user_id=user_id)
     if result.get("status") == "REJECTED":
@@ -762,36 +842,38 @@ async def run_debate_endpoint(
 
 @app.get("/api/debate/latest")
 async def get_latest_debate_endpoint(symbol: Optional[str] = Query(default=None)):
-    """Retrieve the latest completed AI debate session."""
-    session = debate_engine.get_latest_debate(symbol=symbol)
-    if not session:
-        target_symbol = symbol or "NIFTY"
-        try:
-            session = await debate_engine.run_debate(target_symbol)
-        except Exception:
-            return None
-    return session
+    """Retrieve the latest completed AI debate session (never triggers a new debate)."""
+    return debate_engine.get_latest_debate(symbol=symbol)
 
 
 @app.get("/api/debate/history")
-async def get_debate_history_endpoint(limit: int = Query(default=20, ge=1, le=100)):
-    """Retrieve historical AI debate sessions."""
-    return debate_engine.get_debate_history(limit=limit)
+async def get_debate_history_endpoint(
+    limit: int = Query(default=20, ge=1, le=100),
+    current_user: Optional[UserModel] = Depends(get_optional_user),
+):
+    """Historical AI debates; executed ones include their trade outcome (SL / target / P&L)."""
+    return await debate_engine.get_history_with_outcomes(
+        limit=limit, user_id=current_user.id if current_user else None
+    )
 
 
 @app.post("/api/debate/{debate_id}/execute")
 async def execute_debate_verdict_endpoint(
     debate_id: str,
     req: Optional[DebateExecuteRequest] = None,
+    current_user: Optional[UserModel] = Depends(get_optional_user),
 ):
     """Execute the Judge's recommended trade directly into the Paper Trading portfolio."""
     try:
         lots = req.lots if req else 1
-        override = req.model_dump() if req else None
+        override = req.model_dump(exclude_none=True) if req else None
+        if override is not None and set(override) <= {"lots"}:
+            override = None
         result = await debate_engine.execute_verdict(
             debate_id=debate_id,
             lots=lots,
             override_payload=override,
+            user_id=current_user.id if current_user else None,
         )
         return result
     except ValueError as exc:
@@ -803,13 +885,19 @@ async def execute_debate_verdict_endpoint(
 
 # ── Auto-Debate Scheduler Endpoints ──────────────────────────────────────────
 @app.post("/api/scheduler/start")
-async def start_scheduler_endpoint(req: SchedulerStartRequest):
-    """Start automated periodic background debating."""
+async def start_scheduler_endpoint(
+    req: SchedulerStartRequest,
+    current_user: Optional[UserModel] = Depends(get_optional_user),
+):
+    """Start automated periodic background debating (trades go to the caller's paper account)."""
     scheduler = get_scheduler()
     status = await scheduler.start(
         interval_minutes=req.interval_minutes,
         symbol=req.symbol,
         auto_execute=req.auto_execute,
+        market_hours_only=req.market_hours_only,
+        lots=req.lots,
+        user_id=current_user.id if current_user else None,
     )
     return {"status": "started", "scheduler": status}
 

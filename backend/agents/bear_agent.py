@@ -87,6 +87,8 @@ class BearAgent:
             "gemini-3.8-flash",
         ]
         models_to_try = list(dict.fromkeys([m for m in models_to_try if m]))
+        # Gemini returns transient 503 'high demand' spikes: try the model twice before falling back
+        models_to_try = models_to_try * 2
 
         if self._client:
             for model_name in models_to_try:
@@ -102,7 +104,7 @@ class BearAgent:
                                 temperature=0.2,
                             ),
                         ),
-                        timeout=8.0,
+                        timeout=20.0,
                     )
                     raw_text = response.text.strip()
                     if raw_text.startswith("```"):
