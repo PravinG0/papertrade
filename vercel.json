@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://papertrade-s9fq.onrender.com/api/:path*"
+      "destination": "https://papertrade-1-uv24.onrender.com/api/:path*"
     },
     {
       "source": "/(.*)",

@@ -8,7 +8,7 @@ const getBaseUrl = () => {
   }
   // Default to Render production backend if running on Vercel
   if (typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')) {
-    return 'https://papertrade-s9fq.onrender.com/api';
+    return 'https://papertrade-1-uv24.onrender.com/api';
   }
   return '/api';
 };
