@@ -30,25 +30,40 @@ logger = logging.getLogger("paper_engine")
 IST = ZoneInfo("Asia/Kolkata")
 
 
+# ── Statutory charge rates for index OPTIONS (premium turnover) ─────────────────────────────
+# Rates change: re-check against NSE/BSE circulars and the Finance Act before relying on net P&L.
+#   STT        0.15% of premium on the SELL side only       (Budget 2026, effective 1 Apr 2026;
+#                                                            was 0.10% from 1 Oct 2024)
+#   Exchange   NSE index options 0.03553% of premium per side (NSE circular FA73061, from 1 Mar 2026,
+#              includes the 0.0001% investor-protection fund);
+#              BSE (SENSEX) options 0.0325% per side          (BSE, from 1 Oct 2024)
+#   SEBI fee   Rs 10 per crore (0.0001%)
+#   Stamp duty 0.003% of premium on the BUY side only
+#   GST        18% on brokerage + exchange charge + SEBI fee
+#   Brokerage  flat Rs 20 per executed order (Angel One)
+STT_OPTIONS_SELL = 0.0015
+EXCHANGE_CHARGE_RATE = {"NSE": 0.0003553, "BSE": 0.000325}
+SEBI_FEE_RATE = 0.000001
+STAMP_DUTY_BUY = 0.00003
+GST_RATE = 0.18
+BROKERAGE_PER_ORDER = 20.0
+
+
 def calculate_trade_charges(
     buy_turnover: float,
     sell_turnover: float,
     orders_count: int = 2,
+    underlying: str = "NIFTY",
 ) -> dict[str, float]:
-    """Calculate realistic Indian broker and statutory regulatory charges for F&O options."""
-    # 1. Brokerage: ₹20 per executed order
-    brokerage = round(20.0 * orders_count, 2)
-    # 2. STT: 0.0625% on option sell turnover (as revised by SEBI)
-    stt = round(sell_turnover * 0.000625, 2)
-    # 3. Exchange transaction charge: 0.05% of premium turnover
+    """Realistic Indian broker and statutory charges for one round trip in index options."""
+    exch = "BSE" if normalize_index_symbol(underlying) == "SENSEX" else "NSE"
+    brokerage = round(BROKERAGE_PER_ORDER * orders_count, 2)
+    stt = round(sell_turnover * STT_OPTIONS_SELL, 2)
     tot_turnover = buy_turnover + sell_turnover
-    exchange_charges = round(tot_turnover * 0.0005, 2)
-    # 4. SEBI turnover charge: ₹10 per crore (0.0001%)
-    sebi_charges = round(tot_turnover * 0.000001, 2)
-    # 5. Stamp duty: 0.003% on buy turnover only
-    stamp_duty = round(buy_turnover * 0.00003, 2)
-    # 6. GST: 18% on (brokerage + exchange_charges + sebi_charges)
-    gst = round((brokerage + exchange_charges + sebi_charges) * 0.18, 2)
+    exchange_charges = round(tot_turnover * EXCHANGE_CHARGE_RATE[exch], 2)
+    sebi_charges = round(tot_turnover * SEBI_FEE_RATE, 2)
+    stamp_duty = round(buy_turnover * STAMP_DUTY_BUY, 2)
+    gst = round((brokerage + exchange_charges + sebi_charges) * GST_RATE, 2)
 
     total_charges = round(brokerage + stt + exchange_charges + sebi_charges + stamp_duty + gst, 2)
     return {
@@ -508,7 +523,7 @@ class PaperEngine:
                 buy_turnover = round(exit_p * quantity, 2)
                 gross_pnl = round((pos["entry_price"] - exit_p) * quantity, 2)
 
-            charges = calculate_trade_charges(buy_turnover, sell_turnover)
+            charges = calculate_trade_charges(buy_turnover, sell_turnover, underlying=pos.get("underlying", "NIFTY"))
             realized_pnl = round(gross_pnl - charges["total_charges"], 2)
             pnl_pct = round((realized_pnl / (pos["entry_price"] * quantity)) * 100, 2) if pos["entry_price"] > 0 else 0.0
 
@@ -814,7 +829,7 @@ class PaperEngine:
                     buy_turnover = round(exit_p * quantity, 2)
                     gross_pnl = round((pos["entry_price"] - exit_p) * quantity, 2)
 
-                charges = calculate_trade_charges(buy_turnover, sell_turnover)
+                charges = calculate_trade_charges(buy_turnover, sell_turnover, underlying=pos.get("underlying", "NIFTY"))
                 realized_pnl = round(gross_pnl - charges["total_charges"], 2)
                 pnl_pct = round((realized_pnl / (pos["entry_price"] * quantity)) * 100, 2) if pos["entry_price"] > 0 else 0.0
 

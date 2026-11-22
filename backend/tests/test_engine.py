@@ -110,11 +110,28 @@ def test_statutory_charges_calculation():
 
     charges = calculate_trade_charges(buy_turnover, sell_turnover, orders_count=2)
     assert charges["brokerage"] == 40.0  # ₹20 on buy + ₹20 on sell
-    assert charges["stt"] == round(sell_turnover * 0.000625, 2)  # 0.0625% on sell
-    assert charges["exchange_charges"] > 0
-    assert charges["stamp_duty"] > 0
-    assert charges["gst"] > 0
+    assert charges["stt"] == round(sell_turnover * 0.0015, 2)  # 0.15% on sell premium (from 1 Apr 2026)
+    assert charges["exchange_charges"] == round((buy_turnover + sell_turnover) * 0.0003553, 2)  # NSE
+    assert charges["stamp_duty"] == round(buy_turnover * 0.00003, 2)  # 0.003% on buy only
+    assert charges["gst"] == round((40.0 + charges["exchange_charges"] + charges["sebi_charges"]) * 0.18, 2)
     assert charges["total_charges"] > 40.0
+
+
+def test_charges_hand_calculation_nifty_and_sensex():
+    # One NIFTY lot: buy 65 @ 100 = 6,500 ; sell 65 @ 120 = 7,800 ; total turnover 14,300
+    c = calculate_trade_charges(6500.0, 7800.0, underlying="NIFTY")
+    assert c["brokerage"] == 40.0
+    assert c["stt"] == 11.70            # 7,800 x 0.15%
+    assert c["exchange_charges"] == 5.08  # 14,300 x 0.03553% = 5.0808
+    assert c["sebi_charges"] == 0.01      # 14,300 x Rs10/crore = 0.0143
+    assert c["gst"] == 8.12               # (40 + 5.08 + 0.01) x 18% = 8.1162
+    assert abs(c["total_charges"] - (40 + 11.70 + 5.08 + 0.01 + c["stamp_duty"] + 8.12)) < 0.011
+
+    # SENSEX trades on BSE: 0.0325% exchange charge, everything else identical
+    b = calculate_trade_charges(6500.0, 7800.0, underlying="SENSEX")
+    assert b["exchange_charges"] == 4.65  # 14,300 x 0.0325% = 4.6475
+    assert b["gst"] == 8.04               # (40 + 4.65 + 0.01) x 18% = 8.0388
+    assert b["stt"] == c["stt"]
 
 
 # ── 3. Paper Trading Virtual Engine Tests ────────────────────────────────────
