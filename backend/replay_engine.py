@@ -31,6 +31,7 @@ class ReplayEngine:
     def __init__(self) -> None:
         self.is_replaying: bool = False
         self.is_paused: bool = False
+        self.owner_id: Optional[int] = None  # the one account that started this replay
         self.date: str = ""
         self.symbol: str = "NIFTY"
         self.speed: float = 1.0  # 1x, 2x, 5x, 10x
@@ -164,7 +165,8 @@ class ReplayEngine:
         if candle_time:
             time_str = datetime.fromtimestamp(candle_time, tz=IST).strftime("%H:%M:%S")
             if time_str >= "15:15:00":
-                await paper_engine.check_intraday_squareoff(time_str)
+                # The replay clock may only square off the replaying user's own trades
+                await paper_engine.check_intraday_squareoff(time_str, only_user=self.owner_id)
 
     async def pause(self) -> dict[str, Any]:
         """Pause historical replay advancement."""
@@ -218,6 +220,7 @@ class ReplayEngine:
         """Internal teardown of replay task."""
         self.is_replaying = False
         self.is_paused = False
+        self.owner_id = None
         if self._task and not self._task.done():
             self._task.cancel()
             try:

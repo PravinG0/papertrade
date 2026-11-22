@@ -617,7 +617,9 @@ class PaperEngine:
                 "trade": trade_record,
             }
 
-    async def check_intraday_squareoff(self, current_time_str: Optional[str] = None) -> list[dict[str, Any]]:
+    async def check_intraday_squareoff(
+        self, current_time_str: Optional[str] = None, only_user: Optional[int] = None
+    ) -> list[dict[str, Any]]:
         """Auto square off intraday MIS positions at 15:15 IST."""
         if not self.active_positions:
             return []
@@ -629,6 +631,9 @@ class PaperEngine:
             t_check = now_dt.strftime("%H:%M:%S")
         if t_check >= "15:15:00":
             logger.info("Auto-squareoff triggered at %s for %d active positions", t_check, len(self.active_positions))
+            if current_time_str is not None:
+                # Replay clock: never touch anyone else's real positions
+                return await self.exit_all_positions(reason="AUTO_SQUAREOFF_315PM", user_id=only_user)
             return await self.exit_all_positions(reason="AUTO_SQUAREOFF_315PM", system=True)
         return []
 

@@ -84,6 +84,10 @@ async def _periodic_mtm_loop() -> None:
             # Check 15:15 IST MIS Auto Square-off
             await paper_engine.check_intraday_squareoff()
 
+            if replay_engine.is_replaying and _is_market_open() and not settings.ALLOW_OFFHOURS_TRADING:
+                logger.info("Market opened: stopping Historical Replay so live prices resume.")
+                await replay_engine.stop_replay()
+
             has_work = bool(paper_engine.active_positions or paper_engine.active_orders)
             if not has_work and not ws_manager.active_connections:
                 await asyncio.sleep(1.5)
@@ -498,7 +502,8 @@ async def place_paper_order(order: OrderCreateRequest, current_user: Optional[Us
     order_data["user_id"] = user_id
 
     # If in replay mode and current_ltp not supplied, calculate from replay tick
-    if replay_engine.is_replaying and (order_data.get("current_ltp") is None or order_data["current_ltp"] <= 0):
+    replaying_for_me = replay_engine.is_replaying and user_id is not None and replay_engine.owner_id == user_id
+    if replaying_for_me and (order_data.get("current_ltp") is None or order_data["current_ltp"] <= 0):
         current_tick = replay_engine.get_current_tick()
         if current_tick:
             spot = current_tick["close"]
@@ -507,7 +512,7 @@ async def place_paper_order(order: OrderCreateRequest, current_user: Optional[Us
             calc_ltp = BlackScholesEngine.calculate_price(spot, strike, 3.0 / 365.0, iv=0.15, option_type=opt_type)
             order_data["current_ltp"] = calc_ltp
 
-    if not replay_engine.is_replaying:
+    if not replaying_for_me:
         quote = await angel_service.get_option_quote(
             order_data.get("underlying", "NIFTY"),
             order_data.get("strike", 0),
@@ -534,7 +539,7 @@ async def place_paper_order(order: OrderCreateRequest, current_user: Optional[Us
             order_data["target"] = round(fill_ref * (1 + order.target_pct / 100.0), 2)
 
     result = await paper_engine.place_order(
-        order_data, user_id=user_id, enforce_hours=not replay_engine.is_replaying
+        order_data, user_id=user_id, enforce_hours=not replaying_for_me
     )
     if result.get("status") == "REJECTED":
         raise HTTPException(status_code=400, detail=result.get("reject_reason", "Order rejected."))
@@ -567,7 +572,7 @@ async def exit_paper_position(
     """Exit / square off an active paper position at market price or specified limit."""
     user_id = current_user.id if current_user else None
     # If in replay mode and no price passed, resolve current option price
-    if exit_price is None and replay_engine.is_replaying:
+    if exit_price is None and replay_engine.is_replaying and user_id is not None and replay_engine.owner_id == user_id:
         current_tick = replay_engine.get_current_tick()
         if current_tick:
             state = await paper_engine.get_state(user_id=user_id)
@@ -724,18 +729,41 @@ async def get_replay_dates():
     return replay_engine.get_available_dates()
 
 
+def _replay_guard(current_user: Optional[UserModel], starting: bool) -> int:
+    """Replay swaps the live prices for everyone, so it is restricted:
+    sign-in required, never while the market is open, and only one account at a time."""
+    if current_user is None:
+        raise HTTPException(status_code=401, detail="Sign in to use Historical Replay.")
+    if starting and _is_market_open() and not settings.ALLOW_OFFHOURS_TRADING:
+        raise HTTPException(
+            status_code=409,
+            detail="Historical Replay is off while the market is open (09:15-15:30 IST, Mon-Fri) because it "
+                   "replaces live prices for every user. Use it after 15:30 or on weekends.",
+        )
+    if replay_engine.is_replaying and replay_engine.owner_id != current_user.id:
+        raise HTTPException(status_code=409, detail="Another account is using Historical Replay right now.")
+    return current_user.id
+
+
 @app.post("/api/replay/start")
-async def start_historical_replay(req: ReplayStartRequest):
+async def start_historical_replay(
+    req: ReplayStartRequest, current_user: Optional[UserModel] = Depends(get_optional_user)
+):
     """Start 1-minute historical candle replay for a date."""
+    uid = _replay_guard(current_user, starting=True)
     result = await replay_engine.start_replay(date_str=req.date, symbol=req.symbol)
     if result.get("status") == "ERROR":
         raise HTTPException(status_code=400, detail=result.get("message"))
+    replay_engine.owner_id = uid
     return result
 
 
 @app.post("/api/replay/control")
-async def control_historical_replay(req: ReplayControlRequest):
+async def control_historical_replay(
+    req: ReplayControlRequest, current_user: Optional[UserModel] = Depends(get_optional_user)
+):
     """Control replay playback (pause, resume, speed, step_forward, step_backward, stop)."""
+    _replay_guard(current_user, starting=False)
     action = req.action.lower()
     if action == "pause":
         return await replay_engine.pause()

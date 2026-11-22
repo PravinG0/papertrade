@@ -25,6 +25,7 @@ export default function ReplayControls({
   const [speed, setSpeed] = useState(replayState?.speed || 1);
   const [isPlaying, setIsPlaying] = useState(replayState?.is_playing || false);
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   const isActive = replayState?.is_active || false;
   const currentTime = replayState?.current_time || '09:15 AM';
@@ -78,11 +79,16 @@ export default function ReplayControls({
   const handleStartReplay = async () => {
     if (!selectedDate) return;
     setLoading(true);
+    setErrorMsg('');
     try {
       await startReplay(selectedDate);
       onStateChange();
     } catch (err) {
       console.warn('Replay start call error:', err);
+      const detail = err?.response?.data?.detail;
+      setErrorMsg(
+        typeof detail === 'string' ? detail : 'Could not start the replay. Please try again.'
+      );
     } finally {
       setLoading(false);
     }
@@ -158,6 +164,11 @@ export default function ReplayControls({
             >
               {loading ? 'Loading...' : 'Launch Replay'}
             </button>
+            {errorMsg && (
+              <span role="alert" className="text-[11px] text-rose-600 font-sans max-w-xs leading-snug">
+                {errorMsg}
+              </span>
+            )}
           </div>
         ) : (
           <div className="flex items-center gap-2 font-mono">
