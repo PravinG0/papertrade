@@ -329,7 +329,7 @@ class PaperEngine:
                     port = await self._get_or_create_portfolio(session, uid)
                     cash_balance = port.cash_balance
 
-                if side == "BUY" and required_margin > cash_balance:
+                if required_margin > cash_balance:
                     order_record["status"] = "REJECTED"
                     order_record["reject_reason"] = f"Insufficient margin. Required: ₹{required_margin:.2f}, Available: ₹{cash_balance:.2f}"
                     return order_record
@@ -388,11 +388,10 @@ class PaperEngine:
         # Update wallet cash & used margin in SQLite DB
         async with async_session_factory() as session:
             port = await self._get_or_create_portfolio(session, uid)
-            if side == "BUY":
-                port.cash_balance = round(port.cash_balance - order_cost, 2)
-                port.margin_used = round(port.margin_used + order_cost, 2)
-            else:
-                port.cash_balance = round(port.cash_balance + order_cost, 2)
+            # BUY pays the premium; SELL blocks the same amount as margin. Both are released on
+            # exit together with the realised P&L, so the wallet always reconciles.
+            port.cash_balance = round(port.cash_balance - order_cost, 2)
+            port.margin_used = round(port.margin_used + order_cost, 2)
             port.updated_at = fill_time
 
             # Record active trade in SQLite DB
@@ -434,8 +433,8 @@ class PaperEngine:
         async with self._lock:
             if order_id in self.active_orders:
                 order = self.active_orders[order_id]
-                if user_id is not None and order.get("user_id") != user_id:
-                    return {"status": "ERROR", "message": "Unauthorized to cancel this order."}
+                if order.get("user_id") != user_id:
+                    return {"status": "ERROR", "message": f"Order {order_id} not found or already filled."}
                 self.active_orders.pop(order_id)
                 order["status"] = "CANCELLED"
                 order["cancelled_time"] = self._now_ist()
@@ -443,15 +442,18 @@ class PaperEngine:
                 return {"status": "SUCCESS", "order": order}
             return {"status": "ERROR", "message": f"Order {order_id} not found or already filled."}
 
-    async def exit_all_positions(self, reason: str = "EXIT_ALL", user_id: Optional[int] = None) -> list[dict[str, Any]]:
-        """Close all active paper trade positions for user or system-wide."""
+    async def exit_all_positions(
+        self, reason: str = "EXIT_ALL", user_id: Optional[int] = None, system: bool = False
+    ) -> list[dict[str, Any]]:
+        """Close all of ONE account's positions (guest = its own account), or every account's
+        when called by the system itself (system=True, e.g. the 15:15 auto square-off)."""
         results = []
-        pos_ids = [
-            pid for pid, pos in list(self.active_positions.items())
-            if user_id is None or pos.get("user_id") == user_id
+        targets = [
+            (pid, pos.get("user_id")) for pid, pos in list(self.active_positions.items())
+            if system or pos.get("user_id") == user_id
         ]
-        for pid in pos_ids:
-            res = await self.exit_position(pid, reason=reason, user_id=user_id)
+        for pid, owner in targets:
+            res = await self.exit_position(pid, reason=reason, user_id=owner, system=system)
             results.append(res)
         return results
 
@@ -461,11 +463,21 @@ class PaperEngine:
         exit_price: Optional[float] = None,
         reason: str = "MANUAL_EXIT",
         user_id: Optional[int] = None,
+        system: bool = False,
     ) -> dict[str, Any]:
-        """Close an active paper trade position and persist trade outcome to DB."""
+        """Close an active paper trade position and persist trade outcome to DB.
+
+        Only the owning account can close it (guest positions belong to the guest account);
+        system=True is for the engine's own exits (e.g. auto square-off).
+        """
+        not_found = {"status": "ERROR", "message": f"Position {pos_id} not found."}
         async with self._lock:
-            pos = self.active_positions.pop(pos_id, None)
-            if not pos:
+            pos = self.active_positions.get(pos_id)
+            if pos is not None:
+                if not system and pos.get("user_id") != user_id:
+                    return not_found
+                self.active_positions.pop(pos_id, None)
+            else:
                 # Check DB if not found in memory
                 async with async_session_factory() as session:
                     stmt = select(PaperTradeModel).where(
@@ -474,11 +486,13 @@ class PaperEngine:
                     )
                     db_p = (await session.execute(stmt)).scalars().first()
                     if db_p:
+                        if not system and db_p.user_id != user_id:
+                            return not_found
                         pos = db_p.to_dict()
                 if not pos:
-                    return {"status": "ERROR", "message": f"Position {pos_id} not found."}
+                    return not_found
 
-            uid = user_id if user_id is not None else pos.get("user_id")
+            uid = pos.get("user_id")
             exit_p = round(exit_price if exit_price is not None and exit_price > 0 else pos.get("current_ltp", 100.0), 2)
             exit_time = self._now_ist()
             quantity = pos["quantity"]
@@ -501,12 +515,9 @@ class PaperEngine:
             # Update DB and user portfolio
             async with async_session_factory() as session:
                 port = await self._get_or_create_portfolio(session, uid)
-                if side == "BUY":
-                    margin_released = round(pos["entry_price"] * quantity, 2)
-                    port.margin_used = max(0.0, round(port.margin_used - margin_released, 2))
-                    port.cash_balance = round(port.cash_balance + margin_released + realized_pnl, 2)
-                else:
-                    port.cash_balance = round(port.cash_balance + realized_pnl, 2)
+                margin_released = round(pos["entry_price"] * quantity, 2)
+                port.margin_used = max(0.0, round(port.margin_used - margin_released, 2))
+                port.cash_balance = round(port.cash_balance + margin_released + realized_pnl, 2)
                 port.updated_at = exit_time
 
                 # Update or insert closed trade record
@@ -603,7 +614,7 @@ class PaperEngine:
             t_check = now_dt.strftime("%H:%M:%S")
         if t_check >= "15:15:00":
             logger.info("Auto-squareoff triggered at %s for %d active positions", t_check, len(self.active_positions))
-            return await self.exit_all_positions(reason="AUTO_SQUAREOFF_315PM")
+            return await self.exit_all_positions(reason="AUTO_SQUAREOFF_315PM", system=True)
         return []
 
     async def update_sl(
@@ -619,8 +630,8 @@ class PaperEngine:
                 return {"status": "ERROR", "message": f"Position {pos_id} not found."}
 
             pos = self.active_positions[pos_id]
-            if user_id is not None and pos.get("user_id") != user_id:
-                return {"status": "ERROR", "message": "Unauthorized to update this position."}
+            if pos.get("user_id") != user_id:
+                return {"status": "ERROR", "message": f"Position {pos_id} not found."}
 
             if stop_loss is not None:
                 pos["stop_loss"] = round(stop_loss, 2)
@@ -645,7 +656,7 @@ class PaperEngine:
             # Clear active positions in memory for this user
             pids_to_remove = [
                 pid for pid, pos in self.active_positions.items()
-                if user_id is None or pos.get("user_id") == user_id
+                if pos.get("user_id") == user_id
             ]
             for pid in pids_to_remove:
                 self.active_positions.pop(pid, None)
@@ -653,7 +664,7 @@ class PaperEngine:
             # Clear active orders in memory for this user
             oids_to_remove = [
                 oid for oid, ord_rec in self.active_orders.items()
-                if user_id is None or ord_rec.get("user_id") == user_id
+                if ord_rec.get("user_id") == user_id
             ]
             for oid in oids_to_remove:
                 self.active_orders.pop(oid, None)
@@ -665,6 +676,20 @@ class PaperEngine:
                 port.cash_balance = initial_capital
                 port.margin_used = 0.0
                 port.updated_at = self._now_ist()
+
+                # Close this account's still-open DB positions too, or they would be restored
+                # (and re-tracked) the next time the server restarts.
+                owner = PaperTradeModel.user_id.is_(None) if user_id is None else PaperTradeModel.user_id == user_id
+                stale = (await session.execute(
+                    select(PaperTradeModel).where(PaperTradeModel.status == "ACTIVE", owner)
+                )).scalars().all()
+                for t in stale:
+                    t.status = "CLOSED"
+                    t.exit_reason = "WALLET_RESET"
+                    t.exit_price = t.entry_price
+                    t.current_ltp = t.entry_price
+                    t.gross_pnl = t.realized_pnl = t.pnl = t.total_charges = t.pnl_pct = 0.0
+                    t.closed_at = self._now_ist()
                 await session.commit()
 
             logger.info("Paper trading wallet reset to ₹%.2f (user_id=%s)", initial_capital, user_id)
@@ -795,12 +820,9 @@ class PaperEngine:
 
                 async with async_session_factory() as session:
                     port = await self._get_or_create_portfolio(session, uid)
-                    if side == "BUY":
-                        margin_released = round(pos["entry_price"] * quantity, 2)
-                        port.margin_used = max(0.0, round(port.margin_used - margin_released, 2))
-                        port.cash_balance = round(port.cash_balance + margin_released + realized_pnl, 2)
-                    else:
-                        port.cash_balance = round(port.cash_balance + realized_pnl, 2)
+                    margin_released = round(pos["entry_price"] * quantity, 2)
+                    port.margin_used = max(0.0, round(port.margin_used - margin_released, 2))
+                    port.cash_balance = round(port.cash_balance + margin_released + realized_pnl, 2)
                     port.updated_at = now_time
 
                     stmt = select(PaperTradeModel).where(PaperTradeModel.id == pos_id)

@@ -84,6 +84,31 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# The repo is public, so the built-in default JWT secret is public too: anyone could forge a login
+# token for any user. If JWT_SECRET_KEY was not set to something private, derive a stable secret
+# from private values already in the environment (so sessions survive restarts) and warn.
+_DEFAULT_JWT = "tradelab_papertrade_jwt_secret_key_super_secure_99182"
+if settings.JWT_SECRET_KEY == _DEFAULT_JWT:
+    import hashlib
+    import logging as _logging
+
+    _private = [
+        settings.ANGEL_TOTP_SECRET, settings.ANGEL_API_KEY, settings.GEMINI_API_KEY,
+        settings.GOOGLE_CLIENT_SECRET,
+        settings.DATABASE_URL if "@" in settings.DATABASE_URL else "",
+    ]
+    _private = [p for p in _private if p]
+    if _private:
+        settings.JWT_SECRET_KEY = hashlib.sha256(("tradelab-jwt-v1|" + "|".join(_private)).encode()).hexdigest()
+        _logging.getLogger("tradelab.config").warning(
+            "JWT_SECRET_KEY is not set; using a secret derived from private environment values. "
+            "Set JWT_SECRET_KEY to a long random string in your host's environment."
+        )
+    else:
+        _logging.getLogger("tradelab.config").warning(
+            "JWT_SECRET_KEY is the public default. Set it before deploying anywhere public."
+        )
+
 # ── Index Configurations & Constants ─────────────────────────────────────────
 INDEX_CONFIG: dict[str, dict[str, Any]] = {
     "NIFTY": {
