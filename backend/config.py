@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     KEEP_ALIVE_INTERVAL_SECONDS: int = Field(default=600)  # 10 minutes (prevents Render 15-min idle sleep)
     ENABLE_KEEP_ALIVE: bool = Field(default=True)
 
+    # ── Testing switch: allow opening trades outside 09:15-15:15 IST (disables auto square-off) ──
+    ALLOW_OFFHOURS_TRADING: bool = Field(default=False)
+
     # ── Scrip Master Cache Path ───────────────────────────────────────────
     SCRIP_CACHE_PATH: str = Field(
         default=str(Path(__file__).resolve().parent / "scrip_master_cache.json")

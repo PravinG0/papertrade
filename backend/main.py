@@ -533,7 +533,9 @@ async def place_paper_order(order: OrderCreateRequest, current_user: Optional[Us
         if order.target_pct and not order_data.get("target"):
             order_data["target"] = round(fill_ref * (1 + order.target_pct / 100.0), 2)
 
-    result = await paper_engine.place_order(order_data, user_id=user_id)
+    result = await paper_engine.place_order(
+        order_data, user_id=user_id, enforce_hours=not replay_engine.is_replaying
+    )
     if result.get("status") == "REJECTED":
         raise HTTPException(status_code=400, detail=result.get("reject_reason", "Order rejected."))
     if ws_manager.active_connections:

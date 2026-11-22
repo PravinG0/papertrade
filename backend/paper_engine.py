@@ -238,8 +238,36 @@ class PaperEngine:
                 "timestamp": self._now_ist(),
             }
 
-    async def place_order(self, order_req: dict[str, Any], user_id: Optional[int] = None) -> dict[str, Any]:
+    @staticmethod
+    def entry_window_open() -> bool:
+        """Intraday entries allowed Mon-Fri 09:15-15:15 IST (positions are squared off at 15:15)."""
+        if getattr(settings, "ALLOW_OFFHOURS_TRADING", False):
+            return True
+        now = datetime.now(tz=IST)
+        if now.weekday() >= 5:
+            return False
+        return "09:15:00" <= now.strftime("%H:%M:%S") < "15:15:00"
+
+    async def place_order(
+        self,
+        order_req: dict[str, Any],
+        user_id: Optional[int] = None,
+        enforce_hours: bool = True,
+    ) -> dict[str, Any]:
         """Place a paper trade order (Market, Limit, SL) linked to user."""
+        if (
+            enforce_hours
+            and str(order_req.get("order_type") or "MARKET").upper() == "MARKET"
+            and not self.entry_window_open()
+        ):
+            return {
+                "status": "REJECTED",
+                "user_id": user_id,
+                "reject_reason": (
+                    "Market is closed. Intraday paper trades can be opened Mon-Fri 09:15-15:15 IST "
+                    "(all positions are auto-squared-off at 15:15)."
+                ),
+            }
         async with self._lock:
             uid = user_id if user_id is not None else order_req.get("user_id")
             symbol = str(order_req.get("symbol", "")).strip().upper()
@@ -567,6 +595,8 @@ class PaperEngine:
         """Auto square off intraday MIS positions at 15:15 IST."""
         if not self.active_positions:
             return []
+        if getattr(settings, "ALLOW_OFFHOURS_TRADING", False) and not current_time_str:
+            return []  # testing mode: no automatic square-off
         t_check = current_time_str
         if not t_check:
             now_dt = datetime.now(tz=IST)
