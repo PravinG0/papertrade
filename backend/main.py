@@ -29,12 +29,14 @@ if _backend_dir not in sys.path:
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from angel_service import angel_service
 from auth import auth_router, decode_access_token, get_current_user, get_optional_user
 from config import INDEX_CONFIG, normalize_index_symbol, settings
-from database import UserModel, engine, init_db
+from database import DailyReportModel, PaperTradeModel, UserModel, async_session_factory, engine, init_db
 from debate_engine import debate_engine
+from agents import daily_report_agent, report_agent
 from greeks import BlackScholesEngine
 from keep_alive import keep_alive_manager
 from paper_engine import paper_engine
@@ -76,13 +78,42 @@ class ConnectionManager:
 ws_manager = ConnectionManager()
 
 
+async def _on_paper_trading_change(user_id: Optional[int] = None) -> None:
+    """Callback triggered whenever paper_engine creates, fills, updates, or exits trades."""
+    if ws_manager.active_connections:
+        try:
+            state = await paper_engine.get_state(user_id=user_id)
+            await ws_manager.broadcast({
+                "type": "ORDER_UPDATE",
+                "user_id": user_id,
+                "trading_state": state,
+            })
+        except Exception as exc:
+            logger.debug("Failed to broadcast trading state update: %s", exc)
+
+
+paper_engine.register_change_callback(_on_paper_trading_change)
+
+_last_eod_report_date: Optional[str] = None
+
+
 async def _periodic_mtm_loop() -> None:
     """Periodically update paper positions MTM (with REAL Angel One option prices) and square-off."""
+    global _last_eod_report_date
     while True:
         try:
             await asyncio.sleep(0.5)
             # Check 15:15 IST MIS Auto Square-off
             await paper_engine.check_intraday_squareoff()
+
+            # Automatic End-of-Day Daily Trading Report generation at 15:30 IST
+            now_dt = datetime.now(tz=ZoneInfo("Asia/Kolkata"))
+            today_str = now_dt.strftime("%Y-%m-%d")
+            time_str = now_dt.strftime("%H:%M:%S")
+            if time_str >= "15:30:00" and _last_eod_report_date != today_str:
+                _last_eod_report_date = today_str
+                logger.info("Market closed at %s. Triggering automatic Daily Trading Report for %s.", time_str, today_str)
+                asyncio.create_task(report_agent.generate_daily_report(date_str=today_str))
 
             if replay_engine.is_replaying and _is_market_open() and not settings.ALLOW_OFFHOURS_TRADING:
                 logger.info("Market opened: stopping Historical Replay so live prices resume.")
@@ -274,6 +305,10 @@ class SchedulerStartRequest(BaseModel):
     auto_execute: bool = Field(default=False, description="Auto-execute Judge trades if confidence >= 70%")
     market_hours_only: bool = Field(default=True, description="Only debate 09:15-15:30 IST on weekdays")
     lots: int = Field(default=1, ge=1, le=50, description="Lots per auto-executed trade")
+
+
+class ReportGenerateRequest(BaseModel):
+    date: Optional[str] = Field(default=None, description="Report date in YYYY-MM-DD format")
 
 
 # ── Real-Time WebSocket Terminal Feed ────────────────────────────────────────
@@ -663,6 +698,13 @@ async def get_trading_history(current_user: Optional[UserModel] = Depends(get_op
     return await paper_engine.get_history(user_id=user_id)
 
 
+@app.get("/api/trading/all-trades")
+async def get_all_trading_positions(current_user: Optional[UserModel] = Depends(get_optional_user)):
+    """Return all executed trades (active positions and closed history) for the user."""
+    user_id = current_user.id if current_user else None
+    return await paper_engine.get_all_trades(user_id=user_id)
+
+
 @app.get("/api/trading/export")
 async def export_trading_history_csv(current_user: Optional[UserModel] = Depends(get_optional_user)):
     """Export closed trades as a downloadable CSV report."""
@@ -840,6 +882,90 @@ async def get_pnl_calendar(current_user: Optional[UserModel] = Depends(get_optio
     """Return daily P&L heatmap data for trading journal calendar."""
     user_id = current_user.id if current_user else None
     return await paper_engine.get_pnl_calendar(user_id=user_id)
+
+
+# ── Daily Trading Report Endpoints ──────────────────────────────────────────
+@app.get("/api/reports/daily")
+async def get_daily_trading_report(
+    date: Optional[str] = Query(default=None),
+    current_user: Optional[UserModel] = Depends(get_optional_user),
+):
+    """Fetch or generate the comprehensive Daily Trading Report with AI analysis."""
+    user_id = current_user.id if current_user else None
+    target_date = date or datetime.now(tz=ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
+    return await report_agent.get_or_generate_report(date_str=target_date, user_id=user_id)
+
+
+@app.post("/api/reports/daily/generate")
+async def generate_daily_trading_report(
+    req: Optional[ReportGenerateRequest] = None,
+    date: Optional[str] = Query(default=None),
+    current_user: Optional[UserModel] = Depends(get_optional_user),
+):
+    """Force re-generate the Daily Trading Report with refreshed AI analysis."""
+    user_id = current_user.id if current_user else None
+    target_date = (req.date if req and req.date else None) or date or datetime.now(tz=ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
+    return await report_agent.generate_daily_report(date_str=target_date, user_id=user_id)
+
+
+@app.get("/api/reports/dates")
+async def get_available_report_dates(
+    current_user: Optional[UserModel] = Depends(get_optional_user),
+):
+    """Return list of dates with executed trades or generated reports."""
+    user_id = current_user.id if current_user else None
+    async with async_session_factory() as session:
+        # Dates from daily_reports
+        stmt_reports = select(DailyReportModel.date).distinct()
+        if user_id is not None:
+            stmt_reports = stmt_reports.where(DailyReportModel.user_id == user_id)
+        report_dates = (await session.execute(stmt_reports)).scalars().all()
+
+        # Dates from trades
+        stmt_trades = select(PaperTradeModel.created_at, PaperTradeModel.closed_at)
+        if user_id is not None:
+            stmt_trades = stmt_trades.where(PaperTradeModel.user_id == user_id)
+        trade_dates_raw = (await session.execute(stmt_trades)).all()
+
+    dates_set = set(d for d in report_dates if d)
+    for c_at, cl_at in trade_dates_raw:
+        if c_at and len(c_at) >= 10:
+            dates_set.add(c_at[:10])
+        if cl_at and len(cl_at) >= 10:
+            dates_set.add(cl_at[:10])
+
+    today_str = datetime.now(tz=ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
+    dates_set.add(today_str)
+    return sorted(list(dates_set), reverse=True)
+
+
+@app.get("/api/reports/daily/export")
+async def export_daily_trading_report(
+    date: Optional[str] = Query(default=None),
+    format: str = Query(default="markdown"),
+    current_user: Optional[UserModel] = Depends(get_optional_user),
+):
+    """Download daily trading report as Markdown or JSON file."""
+    from fastapi.responses import Response
+
+    user_id = current_user.id if current_user else None
+    target_date = date or datetime.now(tz=ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
+    rep = await report_agent.get_or_generate_report(date_str=target_date, user_id=user_id)
+
+    if format == "json":
+        import json as py_json
+        return Response(
+            content=py_json.dumps(rep, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="daily_trading_report_{target_date}.json"'},
+        )
+
+    md_content = rep.get("markdown_report") or rep.get("report_markdown") or ""
+    return Response(
+        content=md_content,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="daily_trading_report_{target_date}.md"'},
+    )
 
 
 @app.post("/api/analytics/payoff")

@@ -35,6 +35,7 @@ export default function Header({
   onOpenCalculator = () => {},
   onOpenShortcuts = () => {},
   onOpenAuth = () => {},
+  onOpenReport = () => {},
 }) {
   const { user, isAuthenticated, logout } = useAuth();
   const [showUserDropdown, setShowUserDropdown] = useState(false);
@@ -185,6 +186,16 @@ export default function Header({
               </span>
             </div>
           </div>
+
+          {/* AI Daily Trading Report Button */}
+          <button
+            onClick={onOpenReport}
+            className="px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-purple-900/60 to-indigo-900/60 hover:from-purple-800 hover:to-indigo-800 text-purple-200 hover:text-white transition-all border border-purple-700/50 flex items-center gap-1.5 text-xs font-semibold shadow-sm"
+            title="AI Daily Trading Report & Performance Audit"
+          >
+            <Sparkles size={13} className="text-amber-300" />
+            <span className="hidden sm:inline">Daily Report</span>
+          </button>
 
           {/* Calculator Tool Button */}
           <button

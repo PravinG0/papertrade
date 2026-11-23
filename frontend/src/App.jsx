@@ -16,6 +16,7 @@ import DebateArena from './components/DebateArena';
 import QuickScalperBar from './components/QuickScalperBar';
 import WelcomeGuide from './components/WelcomeGuide';
 import BottomNav from './components/BottomNav';
+import DailyReportModal from './components/DailyReportModal';
 import { useAuth } from './context/AuthContext';
 import sound from './utils/audio';
 import {
@@ -58,7 +59,9 @@ export default function App() {
   });
   const [positions, setPositions] = useState([]);
   const [closedPositions, setClosedPositions] = useState([]);
+  const [allTrades, setAllTrades] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [showDailyReportModal, setShowDailyReportModal] = useState(false);
 
   // Replay State
   const [replayState, setReplayState] = useState({
@@ -201,6 +204,9 @@ export default function App() {
       if (Array.isArray(data.recent_closed_positions)) {
         setClosedPositions(data.recent_closed_positions);
       }
+      if (Array.isArray(data.all_trades)) {
+        setAllTrades(data.all_trades);
+      }
       if (Array.isArray(data.orders)) {
         setOrders(data.orders);
       }
@@ -215,6 +221,7 @@ export default function App() {
   useEffect(() => {
     setPositions([]);
     setClosedPositions([]);
+    setAllTrades([]);
     setOrders([]);
     prevPositionsCountRef.current = 0;
     syncTradingState();
@@ -277,6 +284,7 @@ export default function App() {
               if (data.trading_state?.portfolio) setPortfolio(data.trading_state.portfolio);
               if (Array.isArray(data.trading_state?.positions)) setPositions(data.trading_state.positions);
               if (Array.isArray(data.trading_state?.recent_closed_positions)) setClosedPositions(data.trading_state.recent_closed_positions);
+              if (Array.isArray(data.trading_state?.all_trades)) setAllTrades(data.trading_state.all_trades);
               if (Array.isArray(data.trading_state?.orders)) setOrders(data.trading_state.orders);
               if (data.replay_state) setReplayState(data.replay_state);
             } else if (data.type === 'TICK') {
@@ -314,6 +322,7 @@ export default function App() {
                 if (data.trading_state?.portfolio) setPortfolio(data.trading_state.portfolio);
                 if (Array.isArray(data.trading_state?.positions)) setPositions(data.trading_state.positions);
                 if (Array.isArray(data.trading_state?.recent_closed_positions)) setClosedPositions(data.trading_state.recent_closed_positions);
+                if (Array.isArray(data.trading_state?.all_trades)) setAllTrades(data.trading_state.all_trades);
                 if (Array.isArray(data.trading_state?.orders)) setOrders(data.trading_state.orders);
               }
             }
@@ -553,6 +562,7 @@ export default function App() {
         onOpenReplay={() => setShowReplayBar(true)}
         onOpenCalculator={() => setShowCalculator(true)}
         onOpenShortcuts={() => setShowShortcuts(true)}
+        onOpenReport={() => setShowDailyReportModal(true)}
         onOpenAuth={(tab = 'login') => {
           setAuthModalTab(tab);
           setShowAuthModal(true);
@@ -645,7 +655,7 @@ export default function App() {
                     }`}
                   >
                     <Activity size={13} />
-                    <span>Positions ({positions.length})</span>
+                    <span>Positions ({positions.length > 0 ? `${positions.length} open` : (allTrades.length > 0 ? `${allTrades.length} trades` : '0')})</span>
                   </button>
 
                   <button
@@ -667,10 +677,12 @@ export default function App() {
                     <PositionsPanel
                       positions={positions}
                       closedPositions={closedPositions}
+                      allTrades={allTrades}
                       portfolio={portfolio}
                       onExitPosition={handleExitPosition}
                       onExitAllPositions={handleExitAllPositions}
                       onUpdateStopLoss={handleUpdateStopLoss}
+                      onOpenReport={() => setShowDailyReportModal(true)}
                     />
                   ) : (
                     <OrdersPanel
@@ -785,6 +797,12 @@ export default function App() {
       {showShortcuts && (
         <ShortcutsModal onClose={() => setShowShortcuts(false)} />
       )}
+
+      {/* AI Daily Trading Report Modal */}
+      <DailyReportModal
+        isOpen={showDailyReportModal}
+        onClose={() => setShowDailyReportModal(false)}
+      />
 
       {/* Authentication Modal (Sign In / Register) */}
       <AuthModal

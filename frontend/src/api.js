@@ -115,6 +115,17 @@ export const resetPortfolio = () => api.post('/trading/reset');
 
 export const getTradeHistory = () => api.get('/trading/history');
 
+export const getAllTrades = () => api.get('/trading/all-trades');
+
+// Daily Trading Report Endpoints
+export const getDailyReport = (date = null) =>
+  api.get('/reports/daily', { params: date ? { date } : {} });
+
+export const generateDailyReport = (date = null) =>
+  api.post('/reports/daily/generate', { date }, { timeout: 60000 });
+
+export const getReportDates = () => api.get('/reports/dates');
+
 // Replay Mode Endpoints
 export const getReplayDates = () => api.get('/replay/dates');
 

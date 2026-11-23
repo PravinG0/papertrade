@@ -13,6 +13,7 @@ Provides:
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -172,6 +173,7 @@ class UserModel(Base):
     # Relationships
     trades = relationship("PaperTradeModel", back_populates="user", cascade="all, delete-orphan")
     portfolio = relationship("PortfolioModel", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    daily_reports = relationship("DailyReportModel", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<User id={self.id} username={self.username} email={self.email}>"
@@ -230,6 +232,15 @@ class PaperTradeModel(Base):
 
     def to_dict(self) -> dict[str, Any]:
         """Convert ORM record to client-compatible dictionary format."""
+        if self.status == "ACTIVE":
+            trade_status = "OPEN"
+        elif self.exit_reason == "STOP_LOSS_HIT":
+            trade_status = "STOP_LOSS_HIT"
+        elif self.exit_reason == "TARGET_HIT":
+            trade_status = "TARGET_HIT"
+        else:
+            trade_status = "CLOSED"
+
         return {
             "id": self.id,
             "pos_id": self.id,
@@ -253,12 +264,14 @@ class PaperTradeModel(Base):
             "realized_pnl": round(self.realized_pnl, 2),
             "total_charges": round(self.total_charges, 2),
             "status": self.status,
+            "trade_status": trade_status,
             "stop_loss": round(self.stop_loss, 2) if self.stop_loss is not None else None,
             "target": round(self.target, 2) if self.target is not None else None,
             "exit_reason": self.exit_reason,
             "pnl_pct": round(self.pnl_pct, 2),
             "created_at": self.created_at,
             "entry_time": self.created_at,
+            "execution_time": self.created_at,
             "closed_at": self.closed_at,
             "exit_time": self.closed_at or "",
         }
@@ -328,6 +341,112 @@ class AppKVModel(Base):
     value: str = Column(Text, nullable=False, default="")
 
 
+class DailyReportModel(Base):
+    """Persistent daily trading summary and AI-generated analysis."""
+
+    __tablename__ = "daily_reports"
+
+    id: str = Column(String(64), primary_key=True)  # e.g. "report-2026-11-23" or "report-2026-11-23-u1"
+    date: str = Column(String(16), nullable=False, default="", index=True)  # YYYY-MM-DD
+    report_date: str = Column(String(16), nullable=False, default="", index=True)  # Backward-compatible alias
+    user_id: int | None = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    total_trades: int = Column(Integer, nullable=False, default=0)
+    winning_trades: int = Column(Integer, nullable=False, default=0)
+    losing_trades: int = Column(Integer, nullable=False, default=0)
+    win_rate: float = Column(Float, nullable=False, default=0.0)
+    gross_pnl: float = Column(Float, nullable=False, default=0.0)
+    total_charges: float = Column(Float, nullable=False, default=0.0)
+    net_pnl: float = Column(Float, nullable=False, default=0.0)
+    profit_factor: float = Column(Float, nullable=False, default=1.0)
+    average_win: float = Column(Float, nullable=False, default=0.0)
+    average_loss: float = Column(Float, nullable=False, default=0.0)
+    max_drawdown: float = Column(Float, nullable=False, default=0.0)
+    open_trades_count: int = Column(Integer, nullable=False, default=0)
+    sl_hit_count: int = Column(Integer, nullable=False, default=0)
+    target_hit_count: int = Column(Integer, nullable=False, default=0)
+    summary_metrics: str = Column(Text, nullable=False, default="{}")  # JSON string
+    summary_json: str = Column(Text, nullable=False, default="{}")  # Backward-compatible alias
+    raw_analysis: str = Column(Text, nullable=False, default="{}")  # JSON string
+    ai_analysis_json: str = Column(Text, nullable=False, default="{}")  # Backward-compatible alias
+    report_markdown: str = Column(Text, nullable=False, default="")
+    markdown_report: str = Column(Text, nullable=False, default="")  # Backward-compatible alias
+    report_html: str | None = Column(Text, nullable=True)
+    created_at: str = Column(String(32), nullable=False, default=ist_now_str)
+    updated_at: str = Column(String(32), nullable=False, default=ist_now_str)
+
+    # Relationships
+    user = relationship("UserModel", back_populates="daily_reports")
+
+    def __init__(self, **kwargs: Any) -> None:
+        if "date" in kwargs and "report_date" not in kwargs:
+            kwargs["report_date"] = kwargs["date"]
+        elif "report_date" in kwargs and "date" not in kwargs:
+            kwargs["date"] = kwargs["report_date"]
+
+        if "summary_metrics" in kwargs and "summary_json" not in kwargs:
+            kwargs["summary_json"] = kwargs["summary_metrics"]
+        elif "summary_json" in kwargs and "summary_metrics" not in kwargs:
+            kwargs["summary_metrics"] = kwargs["summary_json"]
+
+        if "raw_analysis" in kwargs and "ai_analysis_json" not in kwargs:
+            kwargs["ai_analysis_json"] = kwargs["raw_analysis"]
+        elif "ai_analysis_json" in kwargs and "raw_analysis" not in kwargs:
+            kwargs["raw_analysis"] = kwargs["ai_analysis_json"]
+
+        if "report_markdown" in kwargs and "markdown_report" not in kwargs:
+            kwargs["markdown_report"] = kwargs["report_markdown"]
+        elif "markdown_report" in kwargs and "report_markdown" not in kwargs:
+            kwargs["report_markdown"] = kwargs["markdown_report"]
+
+        super().__init__(**kwargs)
+
+    def to_dict(self) -> dict[str, Any]:
+        metrics_raw = self.summary_metrics or self.summary_json or "{}"
+        try:
+            summary = json.loads(metrics_raw) if isinstance(metrics_raw, str) else metrics_raw
+        except Exception:
+            summary = {}
+
+        analysis_raw = self.raw_analysis or self.ai_analysis_json or "{}"
+        try:
+            ai_analysis = json.loads(analysis_raw) if isinstance(analysis_raw, str) else analysis_raw
+        except Exception:
+            ai_analysis = {}
+
+        md = self.report_markdown or self.markdown_report or ""
+        dt = self.date or self.report_date or ""
+
+        return {
+            "id": self.id,
+            "date": dt,
+            "report_date": dt,
+            "user_id": self.user_id,
+            "total_trades": self.total_trades,
+            "winning_trades": self.winning_trades,
+            "losing_trades": self.losing_trades,
+            "win_rate": round(self.win_rate, 2),
+            "gross_pnl": round(self.gross_pnl, 2),
+            "total_charges": round(self.total_charges, 2),
+            "net_pnl": round(self.net_pnl, 2),
+            "profit_factor": round(self.profit_factor, 2),
+            "average_win": round(self.average_win, 2),
+            "average_loss": round(self.average_loss, 2),
+            "max_drawdown": round(self.max_drawdown, 2),
+            "open_trades_count": self.open_trades_count,
+            "sl_hit_count": self.sl_hit_count,
+            "target_hit_count": self.target_hit_count,
+            "summary_metrics": summary,
+            "summary": summary,
+            "raw_analysis": ai_analysis,
+            "ai_analysis": ai_analysis,
+            "report_markdown": md,
+            "markdown_report": md,
+            "report_html": self.report_html,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
 # ── Database Initialization & Session Dependency ──────────────────────────────
 
 async def init_db() -> None:
@@ -346,6 +465,20 @@ async def init_db() -> None:
                         connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_id ON users (google_id)")
                     if "avatar_url" not in col_names:
                         connection.exec_driver_sql("ALTER TABLE users ADD COLUMN avatar_url VARCHAR(512)")
+
+                    # Check daily_reports columns
+                    res_rep = connection.exec_driver_sql("PRAGMA table_info(daily_reports)").fetchall()
+                    if res_rep:
+                        rep_cols = [col[1] for col in res_rep]
+                        for c_name, c_def in [
+                            ("date", "VARCHAR(16) DEFAULT ''"),
+                            ("summary_metrics", "TEXT DEFAULT '{}'"),
+                            ("raw_analysis", "TEXT DEFAULT '{}'"),
+                            ("report_markdown", "TEXT DEFAULT ''"),
+                            ("report_html", "TEXT"),
+                        ]:
+                            if c_name not in rep_cols:
+                                connection.exec_driver_sql(f"ALTER TABLE daily_reports ADD COLUMN {c_name} {c_def}")
                 except Exception as e:
                     logger.warning("Notice on SQLite table migration: %s", e)
 

@@ -1,31 +1,171 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Activity,
   ArrowUpRight,
   ArrowDownRight,
   Shield,
-  Save,
+  Target,
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  Check,
   LogOut,
   AlertOctagon,
-  Check,
+  Sparkles,
+  FileText,
+  Search,
+  Filter,
+  TrendingUp,
+  TrendingDown,
+  Layers,
 } from 'lucide-react';
 
 export default function PositionsPanel({
   positions = [],
   closedPositions = [],
+  allTrades = [],
   portfolio = {},
   onExitPosition = () => {},
   onExitAllPositions = () => {},
   onUpdateStopLoss = () => {},
+  onOpenReport = () => {},
 }) {
+  const [activeFilter, setActiveFilter] = useState('ALL'); // 'ALL' | 'OPEN' | 'TARGET_HIT' | 'STOP_LOSS_HIT' | 'CLOSED'
+  const [searchQuery, setSearchQuery] = useState('');
   const [editingSl, setEditingSl] = useState({});
   const [savingSl, setSavingSl] = useState({});
   const [exitingId, setExitingId] = useState(null);
   const [exitingAll, setExitingAll] = useState(false);
-  const [showClosed, setShowClosed] = useState(false);
+
+  // Normalize and combine all executed trades
+  const unifiedTrades = useMemo(() => {
+    // If allTrades prop is provided and has items, use that as the primary source
+    const list = [];
+    const seenIds = new Set();
+
+    // 1. Process active open positions
+    positions.forEach((pos) => {
+      const id = pos.id || pos.pos_id || pos.position_id;
+      if (id && !seenIds.has(id)) {
+        seenIds.add(id);
+        const ltp = Number(pos.live_price ?? pos.current_ltp ?? pos.ltp ?? pos.entry_price ?? 0);
+        const entry = Number(pos.entry_price || 0);
+        const qty = Number(pos.quantity || pos.qty || 25);
+        const isBuy = (pos.side || 'BUY').toUpperCase() === 'BUY';
+        const pnl = isBuy ? (ltp - entry) * qty : (entry - ltp) * qty;
+        const pnlPct = entry > 0 ? (pnl / (entry * qty)) * 100 : 0;
+
+        list.push({
+          ...pos,
+          id,
+          pos_id: id,
+          trade_status: 'OPEN',
+          status: 'OPEN',
+          entry_price: entry,
+          exit_price: null,
+          current_ltp: ltp,
+          live_price: ltp,
+          pnl,
+          unrealized_pnl: pnl,
+          realized_pnl: 0,
+          pnl_pct: pnlPct,
+          execution_time: pos.entry_time || pos.created_at || '—',
+          entry_time: pos.entry_time || pos.created_at || '—',
+          exit_time: null,
+          closed_at: null,
+          exit_reason: null,
+          is_open: true,
+        });
+      }
+    });
+
+    // 2. Process closed positions
+    const rawClosed = allTrades.length > 0
+      ? allTrades.filter((t) => t.status !== 'ACTIVE' && t.status !== 'OPEN' && !seenIds.has(t.id || t.pos_id))
+      : closedPositions;
+
+    rawClosed.forEach((trade) => {
+      const id = trade.id || trade.pos_id;
+      if (id && !seenIds.has(id)) {
+        seenIds.add(id);
+        const reason = (trade.exit_reason || trade.reason || '').toUpperCase();
+        const rawStatus = (trade.status || trade.trade_status || '').toUpperCase();
+
+        let tradeStatus = 'CLOSED';
+        if (reason === 'TARGET_HIT' || rawStatus === 'TARGET_HIT' || reason.includes('TARGET')) {
+          tradeStatus = 'TARGET_HIT';
+        } else if (reason === 'STOP_LOSS_HIT' || rawStatus === 'STOP_LOSS_HIT' || reason.includes('STOP_LOSS') || reason.includes('SL')) {
+          tradeStatus = 'STOP_LOSS_HIT';
+        }
+
+        const entry = Number(trade.entry_price || 0);
+        const exit = Number(trade.exit_price ?? trade.current_ltp ?? entry);
+        const pnl = Number(trade.realized_pnl ?? trade.pnl ?? 0);
+        const pnlPct = Number(trade.pnl_pct ?? (entry > 0 ? (pnl / (entry * (trade.quantity || 25))) * 100 : 0));
+
+        list.push({
+          ...trade,
+          id,
+          pos_id: id,
+          trade_status: tradeStatus,
+          status: tradeStatus,
+          entry_price: entry,
+          exit_price: exit,
+          current_ltp: exit,
+          pnl,
+          realized_pnl: pnl,
+          unrealized_pnl: 0,
+          pnl_pct: pnlPct,
+          execution_time: trade.entry_time || trade.created_at || '—',
+          entry_time: trade.entry_time || trade.created_at || '—',
+          exit_time: trade.exit_time || trade.closed_at || '—',
+          closed_at: trade.closed_at || trade.exit_time || '—',
+          exit_reason: trade.exit_reason || trade.reason || 'SQUARED_OFF',
+          is_open: false,
+        });
+      }
+    });
+
+    return list;
+  }, [positions, closedPositions, allTrades]);
+
+  // Counts for tabs
+  const counts = useMemo(() => {
+    return {
+      ALL: unifiedTrades.length,
+      OPEN: unifiedTrades.filter((t) => t.trade_status === 'OPEN').length,
+      TARGET_HIT: unifiedTrades.filter((t) => t.trade_status === 'TARGET_HIT').length,
+      STOP_LOSS_HIT: unifiedTrades.filter((t) => t.trade_status === 'STOP_LOSS_HIT').length,
+      CLOSED: unifiedTrades.filter((t) => t.trade_status === 'CLOSED').length,
+    };
+  }, [unifiedTrades]);
+
+  // Filtered trades by tab and search
+  const filteredTrades = useMemo(() => {
+    return unifiedTrades.filter((t) => {
+      // Tab filter
+      if (activeFilter === 'OPEN' && t.trade_status !== 'OPEN') return false;
+      if (activeFilter === 'TARGET_HIT' && t.trade_status !== 'TARGET_HIT') return false;
+      if (activeFilter === 'STOP_LOSS_HIT' && t.trade_status !== 'STOP_LOSS_HIT') return false;
+      if (activeFilter === 'CLOSED' && t.trade_status !== 'CLOSED') return false;
+
+      // Search filter
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const symbolMatch = (t.symbol || '').toLowerCase().includes(q);
+        const strikeMatch = String(t.strike || '').includes(q);
+        const optTypeMatch = (t.option_type || '').toLowerCase().includes(q);
+        const statusMatch = (t.trade_status || '').toLowerCase().includes(q);
+        if (!symbolMatch && !strikeMatch && !optTypeMatch && !statusMatch) return false;
+      }
+
+      return true;
+    });
+  }, [unifiedTrades, activeFilter, searchQuery]);
 
   const unrealizedPnl = portfolio?.unrealized_pnl ?? positions.reduce((acc, p) => acc + (p.pnl || p.unrealized_pnl || 0), 0);
-  const marginUsed = portfolio?.margin_used ?? positions.reduce((acc, p) => acc + (p.invested_amount || p.margin || 0), 0);
+  const realizedPnl = portfolio?.realized_pnl ?? closedPositions.reduce((acc, p) => acc + (p.realized_pnl || 0), 0);
+  const marginUsed = portfolio?.margin_used ?? positions.reduce((acc, p) => acc + (p.invested_amount || p.margin || (p.entry_price * (p.quantity || 25)) || 0), 0);
 
   const handleSaveSl = async (id) => {
     const newSl = editingSl[id];
@@ -63,195 +203,387 @@ export default function PositionsPanel({
     }
   };
 
+  // Render Status Badge
+  const renderStatusBadge = (tradeStatus) => {
+    switch (tradeStatus) {
+      case 'OPEN':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-950/80 text-cyan-300 border border-cyan-600/70 shadow-sm">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping"></span>
+            OPEN
+          </span>
+        );
+      case 'TARGET_HIT':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950/90 text-emerald-300 border border-emerald-500/70 shadow-sm">
+            <Target size={11} className="text-emerald-400" />
+            TARGET HIT
+          </span>
+        );
+      case 'STOP_LOSS_HIT':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-950/90 text-rose-300 border border-rose-500/70 shadow-sm">
+            <AlertTriangle size={11} className="text-rose-400" />
+            SL HIT
+          </span>
+        );
+      case 'CLOSED':
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-600 shadow-sm">
+            <CheckCircle2 size={11} className="text-slate-400" />
+            CLOSED
+          </span>
+        );
+    }
+  };
+
   return (
-    <div className="bg-[#ffffff] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full">
+    <div className="bg-[#ffffff] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full select-none">
       {/* Header Bar */}
-      <div className="p-3 bg-[#f4f6fa] border-b border-slate-800 flex items-center justify-between">
+      <div className="p-2.5 bg-[#f4f6fa] border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Activity size={16} className="text-cyan-400" />
-          <h3 className="text-xs font-bold uppercase tracking-wider text-ink">
-            {showClosed ? 'Recent Closed Positions' : `Active Positions (${positions.length})`}
+          <Activity size={16} className="text-cyan-500" />
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
+            <span>Terminal Positions &amp; Executed Trades</span>
+            <span className="px-1.5 py-0.2 rounded bg-cyan-100 text-cyan-800 text-[10px] font-mono">
+              {unifiedTrades.length}
+            </span>
           </h3>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setShowClosed((closed) => !closed)}
-          className="px-2 py-1 text-xs font-semibold text-cyan-700 hover:underline"
-        >
-          {showClosed ? 'Show open positions' : 'Show closed positions'}
-        </button>
-        {!showClosed && positions.length > 0 && (
+        <div className="flex items-center gap-2">
+          {/* AI Daily Report Trigger Button */}
           <button
-            onClick={handleExitAll}
-            disabled={exitingAll}
-            className="px-2.5 py-1 rounded bg-rose-600/80 hover:bg-rose-600 text-white text-xs font-semibold flex items-center gap-1 transition-all disabled:opacity-50"
+            onClick={onOpenReport}
+            className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-indigo-900/30 transition-all hover:scale-[1.02]"
+            title="Open AI Daily Trading Report & Performance Audit"
           >
-            <AlertOctagon size={13} />
-            <span>{exitingAll ? 'Exiting All...' : 'Exit All'}</span>
+            <Sparkles size={12} className="text-amber-300" />
+            <span>Daily Report</span>
           </button>
-        )}
-      </div>
 
-      {showClosed ? (
-        <div className="flex-1 overflow-auto">
-          {closedPositions.length === 0 ? (
-            <p className="p-4 text-sm text-slate-500">No closed positions yet.</p>
-          ) : (
-            <table className="w-full min-w-[520px] text-left text-xs">
-              <thead className="bg-slate-100 text-slate-600">
-                <tr>
-                  <th className="p-2">Instrument</th>
-                  <th className="p-2">Entry (₹)</th>
-                  <th className="p-2">Exit (₹)</th>
-                  <th className="p-2">Net P&amp;L (₹)</th>
-                  <th className="p-2">Exit reason</th>
-                  <th className="p-2">Closed at (IST)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {closedPositions.map((trade) => (
-                  <tr key={trade.id} className="border-b border-slate-200">
-                    <td className="p-2 font-semibold">{trade.symbol}</td>
-                    <td className="p-2">{trade.entry_price?.toFixed(2)}</td>
-                    <td className="p-2">{trade.exit_price?.toFixed(2)}</td>
-                    <td className={trade.realized_pnl < 0 ? 'p-2 text-rose-700' : 'p-2 text-emerald-700'}>
-                      {trade.realized_pnl?.toFixed(2)}
-                    </td>
-                    <td className="p-2">{trade.exit_reason?.replaceAll('_', ' ') || '—'}</td>
-                    <td className="p-2 whitespace-nowrap">{trade.closed_at?.replace('T', ' ').slice(0, 19)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {/* Exit All Open Trades Button */}
+          {positions.length > 0 && (
+            <button
+              onClick={handleExitAll}
+              disabled={exitingAll}
+              className="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold flex items-center gap-1 transition-all disabled:opacity-50 shadow-sm"
+              title="Close all open positions at market price"
+            >
+              <AlertOctagon size={13} />
+              <span>{exitingAll ? 'Exiting All...' : `Exit All (${positions.length})`}</span>
+            </button>
           )}
         </div>
-      ) : (
-      <div className="flex-1 overflow-x-auto overflow-y-auto">
-        <table className="w-full min-w-[560px] border-collapse text-xs select-none">
+      </div>
+
+      {/* Filter Tabs & Quick Search Ribbon */}
+      <div className="px-3 py-1.5 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+        {/* Status Filter Buttons */}
+        <div className="flex items-center gap-1 overflow-x-auto scrollbar-none">
+          <button
+            onClick={() => setActiveFilter('ALL')}
+            className={`px-2.5 py-1 rounded-md font-medium text-[11px] flex items-center gap-1 transition-all ${
+              activeFilter === 'ALL'
+                ? 'bg-cyan-600 text-white font-bold shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+            }`}
+          >
+            <span>All Trades</span>
+            <span className="px-1 py-0.2 rounded text-[10px] bg-slate-800/80 text-slate-300 font-mono">
+              {counts.ALL}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveFilter('OPEN')}
+            className={`px-2.5 py-1 rounded-md font-medium text-[11px] flex items-center gap-1 transition-all ${
+              activeFilter === 'OPEN'
+                ? 'bg-cyan-500 text-slate-950 font-bold shadow-sm'
+                : 'text-cyan-400 hover:bg-cyan-950/40'
+            }`}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+            <span>Open</span>
+            <span className="px-1 py-0.2 rounded text-[10px] bg-cyan-950 text-cyan-300 font-mono">
+              {counts.OPEN}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveFilter('TARGET_HIT')}
+            className={`px-2.5 py-1 rounded-md font-medium text-[11px] flex items-center gap-1 transition-all ${
+              activeFilter === 'TARGET_HIT'
+                ? 'bg-emerald-600 text-white font-bold shadow-sm'
+                : 'text-emerald-400 hover:bg-emerald-950/40'
+            }`}
+          >
+            <Target size={11} />
+            <span>Target Hit</span>
+            <span className="px-1 py-0.2 rounded text-[10px] bg-emerald-950 text-emerald-300 font-mono">
+              {counts.TARGET_HIT}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveFilter('STOP_LOSS_HIT')}
+            className={`px-2.5 py-1 rounded-md font-medium text-[11px] flex items-center gap-1 transition-all ${
+              activeFilter === 'STOP_LOSS_HIT'
+                ? 'bg-rose-600 text-white font-bold shadow-sm'
+                : 'text-rose-400 hover:bg-rose-950/40'
+            }`}
+          >
+            <AlertTriangle size={11} />
+            <span>SL Hit</span>
+            <span className="px-1 py-0.2 rounded text-[10px] bg-rose-950 text-rose-300 font-mono">
+              {counts.STOP_LOSS_HIT}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveFilter('CLOSED')}
+            className={`px-2.5 py-1 rounded-md font-medium text-[11px] flex items-center gap-1 transition-all ${
+              activeFilter === 'CLOSED'
+                ? 'bg-slate-700 text-white font-bold shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+            }`}
+          >
+            <CheckCircle2 size={11} />
+            <span>Closed</span>
+            <span className="px-1 py-0.2 rounded text-[10px] bg-slate-800 text-slate-300 font-mono">
+              {counts.CLOSED}
+            </span>
+          </button>
+        </div>
+
+        {/* Quick Search Box */}
+        <div className="relative flex items-center">
+          <Search size={12} className="absolute left-2 text-slate-500 pointer-events-none" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search symbol / strike..."
+            className="pl-6 pr-2 py-0.5 bg-slate-800 border border-slate-700 rounded-md text-[11px] text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-36 sm:w-44"
+          />
+        </div>
+      </div>
+
+      {/* Main Executed Trades Table */}
+      <div className="flex-1 overflow-x-auto overflow-y-auto min-h-[220px]">
+        <table className="w-full min-w-[760px] border-collapse text-xs">
           <thead>
-            <tr className="bg-slate-950/80 text-[10px] uppercase font-mono text-slate-400 border-b border-slate-800">
-              <th className="py-2 px-3 text-left">Instrument</th>
-              <th className="py-2 px-2 text-center">Type</th>
-              <th className="py-2 px-2 text-right">Lots</th>
-              <th className="py-2 px-2 text-right">Qty</th>
-              <th className="py-2 px-2 text-right">Entry (₹)</th>
-              <th className="py-2 px-2 text-right">LTP (₹)</th>
-              <th className="py-2 px-3 text-right">P&L (₹)</th>
-              <th className="py-2 px-3 text-center">Trailing SL</th>
-              <th className="py-2 px-3 text-center">Action</th>
+            <tr className="bg-slate-950 text-[10px] uppercase font-mono text-slate-400 border-b border-slate-800 sticky top-0 z-10">
+              <th className="py-2.5 px-3 text-left">Trade Status</th>
+              <th className="py-2.5 px-3 text-left">Instrument</th>
+              <th className="py-2.5 px-2 text-center">Side / Qty</th>
+              <th className="py-2.5 px-2 text-right">Entry (₹)</th>
+              <th className="py-2.5 px-2 text-right">Exit / LTP (₹)</th>
+              <th className="py-2.5 px-2 text-center">Stop-Loss (₹)</th>
+              <th className="py-2.5 px-2 text-center">Target (₹)</th>
+              <th className="py-2.5 px-3 text-right">P&amp;L (₹)</th>
+              <th className="py-2.5 px-2 text-left">Execution Time (IST)</th>
+              <th className="py-2.5 px-3 text-center">Action / Reason</th>
             </tr>
           </thead>
 
           <tbody className="divide-y divide-slate-800/60 font-mono text-[11px]">
-            {positions.length === 0 ? (
+            {filteredTrades.length === 0 ? (
               <tr>
-                <td colSpan="9" className="py-10 text-center text-slate-500 font-sans">
-                  <p className="font-semibold text-slate-300">No open positions yet</p>
-                  <p className="text-xs mt-1">Tap BUY on a price in the option chain to open one. It will appear here with live profit/loss.</p>
+                <td colSpan="10" className="py-12 text-center text-slate-500 font-sans">
+                  <Activity size={24} className="mx-auto mb-2 text-slate-600" />
+                  <p className="font-semibold text-slate-300">No trades matching filter</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {activeFilter === 'OPEN'
+                      ? 'No open positions currently active. Tap BUY on the option chain to execute a trade.'
+                      : activeFilter === 'TARGET_HIT'
+                      ? 'No target hit trades recorded yet today.'
+                      : activeFilter === 'STOP_LOSS_HIT'
+                      ? 'No stop-loss hit trades recorded yet today.'
+                      : 'Executed trades will appear here with full execution and P&L details.'}
+                  </p>
                 </td>
               </tr>
             ) : (
-              positions.map((pos) => {
-                const id = pos.id || pos.position_id;
-                const pnl = pos.unrealized_pnl ?? pos.pnl ?? 0;
-                const isProfit = Number(pnl) >= 0;
-                const optType = pos.option_type || (pos.symbol?.includes('CE') ? 'CE' : 'PE');
+              filteredTrades.map((trade) => {
+                const id = trade.id || trade.pos_id;
+                const isOpen = trade.is_open || trade.trade_status === 'OPEN';
+                const pnl = Number(trade.pnl ?? trade.realized_pnl ?? 0);
+                const isProfit = pnl >= 0;
+                const optType = trade.option_type || (trade.symbol?.includes('CE') ? 'CE' : 'PE');
                 const isCe = optType === 'CE';
-                const liveLtp = pos.live_price ?? pos.ltp ?? pos.entry_price;
-                const currentSl = editingSl[id] !== undefined ? editingSl[id] : (pos.stop_loss || '');
+                const isBuy = (trade.side || 'BUY').toUpperCase() === 'BUY';
+                const currentSl = editingSl[id] !== undefined ? editingSl[id] : (trade.stop_loss || '');
 
                 return (
-                  <tr key={id} className="hover:bg-slate-800/40 transition-colors">
-                    {/* Instrument */}
-                    <td className="py-2 px-3 text-left">
-                      <span className="font-bold text-ink">
-                        {pos.option_symbol || pos.symbol || 'NIFTY Option'}
-                      </span>
+                  <tr
+                    key={id}
+                    className={`transition-colors ${
+                      isOpen
+                        ? 'bg-slate-900/60 hover:bg-slate-800/60'
+                        : trade.trade_status === 'TARGET_HIT'
+                        ? 'bg-emerald-950/20 hover:bg-emerald-950/40'
+                        : trade.trade_status === 'STOP_LOSS_HIT'
+                        ? 'bg-rose-950/20 hover:bg-rose-950/40'
+                        : 'hover:bg-slate-900/40'
+                    }`}
+                  >
+                    {/* 1. Trade Status Badge */}
+                    <td className="py-2.5 px-3 text-left whitespace-nowrap">
+                      {renderStatusBadge(trade.trade_status)}
+                    </td>
+
+                    {/* 2. Instrument & Type */}
+                    <td className="py-2.5 px-3 text-left">
+                      <div className="flex items-center gap-1.5 font-bold text-slate-900 font-sans">
+                        <span>{trade.symbol || `${trade.underlying || 'NIFTY'} ${trade.strike} ${optType}`}</span>
+                        <span
+                          className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
+                            isCe
+                              ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                              : 'bg-rose-950 text-rose-400 border border-rose-800'
+                          }`}
+                        >
+                          {optType}
+                        </span>
+                      </div>
                       <div className="text-[10px] text-slate-500 font-sans">
-                        Strike: {pos.strike || '—'}
+                        Strike: {trade.strike ? `₹${trade.strike}` : 'ATM'}
                       </div>
                     </td>
 
-                    {/* Type CE / PE */}
-                    <td className="py-2 px-2 text-center">
+                    {/* 3. Side & Qty */}
+                    <td className="py-2.5 px-2 text-center">
                       <span
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                          isCe
-                            ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                            : 'bg-rose-950 text-rose-400 border border-rose-800'
+                        className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
+                          isBuy
+                            ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/40'
+                            : 'bg-rose-950/60 text-rose-400 border border-rose-800/40'
                         }`}
                       >
-                        {optType}
+                        {trade.side || 'BUY'}
                       </span>
+                      <div className="text-[10px] text-slate-400 mt-0.5">
+                        {trade.lots || Math.max(1, Math.round((trade.quantity || 25) / 25))} Lot ({trade.quantity || 25} qty)
+                      </div>
                     </td>
 
-                    {/* Lots */}
-                    <td className="py-2 px-2 text-right text-slate-300">
-                      {pos.lots || Math.max(1, Math.round((pos.quantity || 25) / 25))}
+                    {/* 4. Entry Price */}
+                    <td className="py-2.5 px-2 text-right text-slate-300 num-tabular">
+                      ₹{Number(trade.entry_price || 0).toFixed(2)}
                     </td>
 
-                    {/* Qty */}
-                    <td className="py-2 px-2 text-right text-slate-300">
-                      {pos.quantity || pos.qty || 25}
+                    {/* 5. Exit / LTP Price */}
+                    <td className="py-2.5 px-2 text-right num-tabular">
+                      {isOpen ? (
+                        <div>
+                          <span className="font-bold text-slate-900">
+                            ₹{Number(trade.current_ltp || trade.live_price || trade.entry_price).toFixed(2)}
+                          </span>
+                          <div className="text-[9px] text-cyan-600 font-sans uppercase">Live LTP</div>
+                        </div>
+                      ) : (
+                        <div>
+                          <span className="font-bold text-slate-900">
+                            ₹{Number(trade.exit_price ?? trade.current_ltp ?? trade.entry_price).toFixed(2)}
+                          </span>
+                          <div className="text-[9px] text-slate-500 font-sans uppercase">Exit Price</div>
+                        </div>
+                      )}
                     </td>
 
-                    {/* Entry Price */}
-                    <td className="py-2 px-2 text-right text-slate-300 num-tabular">
-                      ₹{Number(pos.entry_price || 0).toFixed(2)}
+                    {/* 6. Stop-Loss Price (Editable if open) */}
+                    <td className="py-2.5 px-2 text-center">
+                      {isOpen ? (
+                        <div className="flex items-center justify-center gap-1 font-sans">
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={currentSl}
+                            onChange={(e) =>
+                              setEditingSl((prev) => ({ ...prev, [id]: e.target.value }))
+                            }
+                            placeholder="Set SL"
+                            className="w-16 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-slate-200 text-xs font-mono focus:outline-none focus:border-cyan-500 text-center"
+                          />
+                          {editingSl[id] !== undefined && (
+                            <button
+                              onClick={() => handleSaveSl(id)}
+                              disabled={savingSl[id]}
+                              className="p-1 rounded bg-cyan-600 hover:bg-cyan-500 text-white transition-colors"
+                              title="Save Trailing Stop-Loss"
+                            >
+                              <Check size={12} />
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-slate-400 font-mono">
+                          {trade.stop_loss ? `₹${Number(trade.stop_loss).toFixed(2)}` : '—'}
+                        </span>
+                      )}
                     </td>
 
-                    {/* Live LTP */}
-                    <td className="py-2 px-2 text-right font-bold text-ink num-tabular">
-                      ₹{Number(liveLtp).toFixed(2)}
+                    {/* 7. Target Price */}
+                    <td className="py-2.5 px-2 text-center text-slate-300 font-mono">
+                      {trade.target ? (
+                        <span className="text-emerald-400 font-bold">₹{Number(trade.target).toFixed(2)}</span>
+                      ) : (
+                        <span className="text-slate-500">—</span>
+                      )}
                     </td>
 
-                    {/* Current P&L */}
-                    <td className="py-2 px-3 text-right num-tabular">
-                      <span className={`font-bold ${isProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {/* 8. P&L (Unrealized or Realized) */}
+                    <td className="py-2.5 px-3 text-right num-tabular whitespace-nowrap">
+                      <div className={`font-bold ${isProfit ? 'text-emerald-600' : 'text-rose-600'}`}>
                         {isProfit ? '+' : ''}₹{Number(pnl).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </span>
+                      </div>
                       <div className={`text-[10px] ${isProfit ? 'text-emerald-500' : 'text-rose-500'}`}>
-                        {pos.pnl_percent != null ? `${Number(pos.pnl_percent).toFixed(2)}%` : ''}
+                        {trade.pnl_pct != null
+                          ? `${Number(trade.pnl_pct) >= 0 ? '+' : ''}${Number(trade.pnl_pct).toFixed(2)}%`
+                          : ''}
                       </div>
                     </td>
 
-                    {/* Trailing Stop Loss Input */}
-                    <td className="py-2 px-3 text-center">
-                      <div className="flex items-center justify-center gap-1 font-sans">
-                        <input
-                          type="number"
-                          step="0.5"
-                          value={currentSl}
-                          onChange={(e) =>
-                            setEditingSl((prev) => ({ ...prev, [id]: e.target.value }))
-                          }
-                          placeholder="SL Price"
-                          className="w-16 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-slate-200 text-xs font-mono focus:outline-none focus:border-cyan-500"
-                        />
-                        {editingSl[id] !== undefined && (
-                          <button
-                            onClick={() => handleSaveSl(id)}
-                            disabled={savingSl[id]}
-                            className="p-1 rounded bg-cyan-600 hover:bg-cyan-500 text-white transition-colors"
-                            title="Save Stop-Loss"
-                          >
-                            <Check size={12} />
-                          </button>
-                        )}
+                    {/* 9. Execution Time */}
+                    <td className="py-2.5 px-2 text-left font-sans whitespace-nowrap">
+                      <div className="flex items-center gap-1 text-[11px] text-slate-300">
+                        <Clock size={11} className="text-slate-500 shrink-0" />
+                        <span>Entry: {trade.execution_time?.replace('T', ' ').slice(11, 19) || '—'}</span>
                       </div>
+                      {!isOpen && trade.exit_time && (
+                        <div className="text-[10px] text-slate-500">
+                          Exit: {trade.exit_time?.replace('T', ' ').slice(11, 19)}
+                        </div>
+                      )}
                     </td>
 
-                    {/* Exit Button */}
-                    <td className="py-2 px-3 text-center font-sans">
-                      <button
-                        onClick={() => handleExit(id)}
-                        disabled={exitingId === id}
-                        className="px-2 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center gap-1 mx-auto transition-colors disabled:opacity-50"
-                      >
-                        <LogOut size={11} />
-                        <span>{exitingId === id ? 'Exiting...' : 'Exit'}</span>
-                      </button>
+                    {/* 10. Action / Exit Reason */}
+                    <td className="py-2.5 px-3 text-center font-sans">
+                      {isOpen ? (
+                        <button
+                          onClick={() => handleExit(id)}
+                          disabled={exitingId === id}
+                          className="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center gap-1 mx-auto transition-colors disabled:opacity-50 shadow-sm"
+                          title="Square off position at current market price"
+                        >
+                          <LogOut size={11} />
+                          <span>{exitingId === id ? 'Exiting...' : 'Exit'}</span>
+                        </button>
+                      ) : (
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded text-[10px] font-medium uppercase tracking-tight ${
+                            trade.trade_status === 'TARGET_HIT'
+                              ? 'bg-emerald-950/70 text-emerald-300 border border-emerald-800'
+                              : trade.trade_status === 'STOP_LOSS_HIT'
+                              ? 'bg-rose-950/70 text-rose-300 border border-rose-800'
+                              : 'bg-slate-800 text-slate-400 border border-slate-700'
+                          }`}
+                        >
+                          {trade.exit_reason?.replaceAll('_', ' ') || 'Closed'}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 );
@@ -260,39 +592,59 @@ export default function PositionsPanel({
           </tbody>
         </table>
       </div>
-      )}
 
       {/* Bottom Summary Bar */}
       <div className="p-2.5 bg-[#f4f6fa] border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-4 font-mono">
+        <div className="flex flex-wrap items-center gap-4 font-mono">
           <div>
-            <span className="text-slate-500 font-sans uppercase text-[10px] mr-1">Total Margin Used:</span>
-            <span className="font-bold text-slate-200 num-tabular">
+            <span className="text-slate-500 font-sans uppercase text-[10px] mr-1">Open Margin Used:</span>
+            <span className="font-bold text-slate-900 num-tabular">
               ₹{Number(marginUsed).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </div>
 
           <div>
-            <span className="text-slate-500 font-sans uppercase text-[10px] mr-1">Unrealized P&L:</span>
+            <span className="text-slate-500 font-sans uppercase text-[10px] mr-1">Unrealized MTM:</span>
             <span
               className={`font-bold num-tabular ${
-                unrealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                unrealizedPnl >= 0 ? 'text-emerald-600' : 'text-rose-600'
               }`}
             >
               {unrealizedPnl >= 0 ? '+' : ''}₹{Number(unrealizedPnl).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </div>
+
+          <div>
+            <span className="text-slate-500 font-sans uppercase text-[10px] mr-1">Realized Net P&amp;L:</span>
+            <span
+              className={`font-bold num-tabular ${
+                realizedPnl >= 0 ? 'text-emerald-600' : 'text-rose-600'
+              }`}
+            >
+              {realizedPnl >= 0 ? '+' : ''}₹{Number(realizedPnl).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+          </div>
         </div>
 
-        {!showClosed && positions.length > 0 && (
+        <div className="flex items-center gap-2">
           <button
-            onClick={handleExitAll}
-            disabled={exitingAll}
-            className="px-3 py-1 rounded bg-rose-600/80 hover:bg-rose-600 text-white font-semibold transition-all text-xs"
+            onClick={onOpenReport}
+            className="px-2.5 py-1 rounded bg-indigo-900/60 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/60 font-semibold text-xs flex items-center gap-1.5 transition-colors"
           >
-            Exit All Positions
+            <Sparkles size={12} className="text-indigo-400" />
+            <span>View Daily AI Report</span>
           </button>
-        )}
+
+          {positions.length > 0 && (
+            <button
+              onClick={handleExitAll}
+              disabled={exitingAll}
+              className="px-3 py-1 rounded bg-rose-600/90 hover:bg-rose-600 text-white font-semibold transition-all text-xs"
+            >
+              Exit All Positions
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -112,6 +112,21 @@ class PaperEngine:
         self.active_positions: dict[str, dict[str, Any]] = {}  # pos_id -> Position
         self.active_orders: dict[str, dict[str, Any]] = {}     # order_id -> Order
         self._lock = asyncio.Lock()
+        self._change_callbacks: list[Any] = []
+
+    def register_change_callback(self, cb: Any) -> None:
+        if cb not in self._change_callbacks:
+            self._change_callbacks.append(cb)
+
+    async def _notify_change(self, user_id: Optional[int] = None) -> None:
+        for cb in list(self._change_callbacks):
+            try:
+                if asyncio.iscoroutinefunction(cb):
+                    asyncio.create_task(cb(user_id))
+                else:
+                    cb(user_id)
+            except Exception as exc:
+                logger.debug("Change callback error: %s", exc)
 
     @classmethod
     def get_instance(cls) -> PaperEngine:
@@ -155,7 +170,9 @@ class PaperEngine:
                 trades = res.scalars().all()
                 async with self._lock:
                     for t in trades:
-                        self.active_positions[t.id] = t.to_dict()
+                        td = t.to_dict()
+                        td["trade_status"] = "OPEN"
+                        self.active_positions[t.id] = td
                 logger.info("Restored %d active paper positions from DB.", len(trades))
         except Exception as exc:
             logger.warning("Could not restore active positions from DB: %s", exc)
@@ -174,10 +191,15 @@ class PaperEngine:
                 initial_capital = port.initial_capital
 
             # Filter active positions and orders for user
-            user_positions = [
-                p for p in self.active_positions.values()
-                if p.get("user_id") == user_id
-            ]
+            user_positions = []
+            for p in self.active_positions.values():
+                if p.get("user_id") == user_id:
+                    pos_copy = dict(p)
+                    pos_copy.setdefault("trade_status", "OPEN")
+                    pos_copy.setdefault("status", "ACTIVE")
+                    pos_copy.setdefault("exit_price", None)
+                    user_positions.append(pos_copy)
+
             user_orders = [
                 o for o in self.active_orders.values()
                 if o.get("user_id") == user_id
@@ -185,6 +207,13 @@ class PaperEngine:
 
             # Query persistent closed trades from SQLite
             closed_trades = await self.get_history(user_id=user_id)
+
+            # Combined chronological list of ALL executed trades (open + completed)
+            all_trades = list(user_positions) + list(closed_trades)
+            all_trades.sort(
+                key=lambda t: t.get("entry_time") or t.get("created_at") or "",
+                reverse=True,
+            )
 
             unrealized_pnl = sum(p.get("unrealized_pnl", 0.0) for p in user_positions)
             realized_pnl = sum(t.get("realized_pnl", 0.0) for t in closed_trades)
@@ -215,6 +244,10 @@ class PaperEngine:
             avg_loss = round(gross_loss / losing_trades, 2) if losing_trades > 0 else 0.0
             max_dd, max_dd_pct = compute_drawdown(closed_trades, initial_capital)
 
+            sl_hit_count = len([t for t in closed_trades if t.get("exit_reason") == "STOP_LOSS_HIT"])
+            target_hit_count = len([t for t in closed_trades if t.get("exit_reason") == "TARGET_HIT"])
+            manual_exit_count = len([t for t in closed_trades if t.get("exit_reason") in ("MANUAL_EXIT", "EXIT_ALL", "AUTO_SQUAREOFF_315PM", "WALLET_RESET")])
+
             wallet_dict = {
                 "initial_capital": initial_capital,
                 "capital": round(cash_balance, 2),
@@ -234,11 +267,14 @@ class PaperEngine:
                 "wallet": wallet_dict,
                 "portfolio": wallet_dict,
                 "positions": user_positions,
+                "closed_positions": closed_trades,
                 "recent_closed_positions": closed_trades[:50],
+                "all_trades": all_trades,
                 "active_orders": user_orders,
                 "orders": user_orders,
                 "statistics": {
                     "total_trades": total_trades,
+                    "total_executed_trades": len(all_trades),
                     "winning_trades": winning_trades,
                     "losing_trades": losing_trades,
                     "win_rate": win_rate,
@@ -249,6 +285,9 @@ class PaperEngine:
                     "max_drawdown_pct": max_dd_pct,
                     "total_charges": round(total_charges, 2),
                     "open_positions_count": len(user_positions),
+                    "sl_hit_count": sl_hit_count,
+                    "target_hit_count": target_hit_count,
+                    "manual_exit_count": manual_exit_count,
                     "pending_orders_count": len(user_orders),
                 },
                 "timestamp": self._now_ist(),
@@ -376,6 +415,9 @@ class PaperEngine:
 
         # Create Position
         pos_id = f"POS-{uuid.uuid4().hex[:8].upper()}"
+        stop_loss_val = round(float(order["stop_loss"]), 2) if order.get("stop_loss") is not None else None
+        target_val = round(float(order["target"]), 2) if order.get("target") is not None else None
+
         position = {
             "id": pos_id,
             "pos_id": pos_id,
@@ -391,14 +433,25 @@ class PaperEngine:
             "lot_size": order["lot_size"],
             "quantity": quantity,
             "entry_price": round(fill_price, 2),
+            "exit_price": None,
             "current_ltp": round(fill_price, 2),
             "ltp": round(fill_price, 2),
             "live_price": round(fill_price, 2),
             "unrealized_pnl": 0.0,
             "pnl": 0.0,
-            "stop_loss": order.get("stop_loss"),
-            "target": order.get("target"),
+            "realized_pnl": 0.0,
+            "gross_pnl": 0.0,
+            "total_charges": 0.0,
+            "status": "ACTIVE",
+            "trade_status": "OPEN",
+            "stop_loss": stop_loss_val,
+            "target": target_val,
+            "exit_reason": None,
             "entry_time": fill_time,
+            "created_at": fill_time,
+            "exit_time": "",
+            "closed_at": None,
+            "pnl_pct": 0.0,
         }
 
         # Update wallet cash & used margin in SQLite DB
@@ -428,8 +481,8 @@ class PaperEngine:
                 realized_pnl=0.0,
                 total_charges=0.0,
                 status="ACTIVE",
-                stop_loss=order.get("stop_loss"),
-                target=order.get("target"),
+                stop_loss=stop_loss_val,
+                target=target_val,
                 pnl_pct=0.0,
                 created_at=fill_time,
             )
@@ -438,6 +491,7 @@ class PaperEngine:
 
         self.active_positions[pos_id] = position
         order["position_id"] = pos_id
+        await self._notify_change(uid)
         logger.info(
             "Order %s filled: %s %d qty %s @ ₹%.2f (user_id=%s)",
             order["order_id"], side, quantity, order["symbol"], fill_price, uid,
@@ -454,6 +508,7 @@ class PaperEngine:
                 self.active_orders.pop(order_id)
                 order["status"] = "CANCELLED"
                 order["cancelled_time"] = self._now_ist()
+                await self._notify_change(user_id)
                 logger.info("Order %s cancelled.", order_id)
                 return {"status": "SUCCESS", "order": order}
             return {"status": "ERROR", "message": f"Order {order_id} not found or already filled."}
@@ -579,6 +634,7 @@ class PaperEngine:
                     session.add(db_trade)
                 await session.commit()
 
+            trade_status = "STOP_LOSS_HIT" if reason == "STOP_LOSS_HIT" else ("TARGET_HIT" if reason == "TARGET_HIT" else "CLOSED")
             trade_record = {
                 "id": pos_id,
                 "pos_id": pos_id,
@@ -598,11 +654,18 @@ class PaperEngine:
                 "realized_pnl": realized_pnl,
                 "pnl": realized_pnl,
                 "pnl_pct": pnl_pct,
+                "status": "CLOSED",
+                "trade_status": trade_status,
+                "stop_loss": pos.get("stop_loss"),
+                "target": pos.get("target"),
                 "entry_time": pos["entry_time"],
+                "created_at": pos.get("created_at") or pos["entry_time"],
                 "exit_time": exit_time,
                 "closed_at": exit_time,
                 "exit_reason": reason,
             }
+
+            await self._notify_change(uid)
 
             logger.info(
                 "Position %s exited @ ₹%.2f. Realized Net PnL: ₹%.2f (Charges: ₹%.2f, %s, user_id=%s)",
@@ -669,6 +732,7 @@ class PaperEngine:
                         db_trade.target = round(target, 2)
                     await session.commit()
 
+            await self._notify_change(user_id)
             return {"status": "SUCCESS", "position": pos}
 
     async def reset_portfolio(self, initial_capital: float = 1000000.0, user_id: Optional[int] = None) -> dict[str, Any]:
@@ -714,6 +778,7 @@ class PaperEngine:
                 await session.commit()
 
             logger.info("Paper trading wallet reset to ₹%.2f (user_id=%s)", initial_capital, user_id)
+            await self._notify_change(user_id)
             return {
                 "status": "SUCCESS",
                 "message": f"Portfolio reset to ₹{initial_capital:,.2f}",
@@ -773,6 +838,39 @@ class PaperEngine:
             data["pnl"] = round(data["pnl"], 2)
             calendar_data.append(data)
         return calendar_data
+
+    async def get_all_trades(self, user_id: Optional[int] = None) -> list[dict[str, Any]]:
+        """Return all trades (open active positions and closed history) for user or guest."""
+        open_trades = [
+            dict(p) for p in self.active_positions.values()
+            if p.get("user_id") == user_id
+        ]
+        for p in open_trades:
+            p.setdefault("trade_status", "OPEN")
+            p.setdefault("status", "ACTIVE")
+            p.setdefault("exit_price", None)
+
+        closed = await self.get_history(user_id=user_id)
+        all_t = open_trades + closed
+        all_t.sort(
+            key=lambda t: t.get("entry_time") or t.get("created_at") or "",
+            reverse=True,
+        )
+        return all_t
+
+    async def get_daily_trades(
+        self, date_str: Optional[str] = None, user_id: Optional[int] = None
+    ) -> list[dict[str, Any]]:
+        """Return all trades executed on or closed on date_str (default today YYYY-MM-DD)."""
+        target_date = (date_str or self._today_date())[:10]
+        all_t = await self.get_all_trades(user_id=user_id)
+        daily = []
+        for t in all_t:
+            created = (t.get("created_at") or t.get("entry_time") or "")[:10]
+            closed = (t.get("closed_at") or t.get("exit_time") or "")[:10]
+            if created == target_date or closed == target_date:
+                daily.append(t)
+        return daily
 
     async def update_market_prices(self, quotes: dict[str, float]) -> None:
         """Update active positions MTM and execute pending SL / Target triggers."""
@@ -865,6 +963,7 @@ class PaperEngine:
                     "Automated %s on %s @ ₹%.2f. Net PnL: ₹%.2f (Charges: ₹%.2f, user_id=%s)",
                     reason, pos["symbol"], exit_p, realized_pnl, charges["total_charges"], uid,
                 )
+                await self._notify_change(uid)
 
             # 2. Check Pending Limit / Stop-Loss orders
             executed_orders: list[tuple[str, float]] = []

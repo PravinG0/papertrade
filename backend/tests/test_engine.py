@@ -20,6 +20,7 @@ from paper_engine import (
     calculate_trade_charges,
 )
 from replay_engine import ReplayEngine
+from database import init_db
 from debate_schemas import MarketSnapshot
 from agents.bull_agent import BullAgent
 from agents.bear_agent import BearAgent
@@ -137,6 +138,7 @@ def test_charges_hand_calculation_nifty_and_sensex():
 # ── 3. Paper Trading Virtual Engine Tests ────────────────────────────────────
 @pytest.mark.asyncio
 async def test_paper_engine_lifecycle():
+    await init_db()
     engine = PaperEngine.get_instance()
 
     # Reset portfolio
@@ -233,4 +235,106 @@ def test_quantitative_agents_fallbacks():
     judge = JudgeAgent()
     judge_out = judge._fallback_output(snapshot, bull_out, bear_out)
     assert judge_out.verdict in ["BUY CE", "BUY PE", "NO_TRADE"]
-    assert judge_out.reasoning != ""
+
+
+@pytest.mark.asyncio
+async def test_daily_report_agent_generation():
+    from agents.report_agent import report_agent
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    await init_db()
+    engine = PaperEngine.get_instance()
+    await engine.reset_portfolio(1000000.0)
+
+    today = datetime.now(tz=ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
+
+    # 1. Place a trade that will hit Target
+    tgt_trade = await engine.place_order({
+        "symbol": "NIFTY26NOV25000CE",
+        "underlying": "NIFTY",
+        "strike": 25000.0,
+        "option_type": "CE",
+        "side": "BUY",
+        "order_type": "MARKET",
+        "lots": 1,
+        "price": 100.0,
+        "current_ltp": 100.0,
+        "stop_loss": 80.0,
+        "target": 140.0,
+    })
+    tgt_pos_id = tgt_trade["position_id"]
+    await engine.exit_position(tgt_pos_id, exit_price=140.0, reason="TARGET_HIT")
+
+    # 2. Place a trade that will hit Stop-Loss
+    sl_trade = await engine.place_order({
+        "symbol": "NIFTY26NOV25100PE",
+        "underlying": "NIFTY",
+        "strike": 25100.0,
+        "option_type": "PE",
+        "side": "BUY",
+        "order_type": "MARKET",
+        "lots": 1,
+        "price": 120.0,
+        "current_ltp": 120.0,
+        "stop_loss": 95.0,
+        "target": 160.0,
+    })
+    sl_pos_id = sl_trade["position_id"]
+    await engine.exit_position(sl_pos_id, exit_price=95.0, reason="STOP_LOSS_HIT")
+
+    # 3. Place an open trade
+    open_trade = await engine.place_order({
+        "symbol": "NIFTY26NOV25200CE",
+        "underlying": "NIFTY",
+        "strike": 25200.0,
+        "option_type": "CE",
+        "side": "BUY",
+        "order_type": "MARKET",
+        "lots": 1,
+        "price": 85.0,
+        "current_ltp": 85.0,
+        "stop_loss": 65.0,
+        "target": 125.0,
+    })
+
+    # Generate daily report
+    report = await report_agent.generate_daily_report(date_str=today)
+
+    assert report["total_trades"] >= 3
+    assert report["sl_hit_count"] >= 1
+    assert report["target_hit_count"] >= 1
+    assert report["open_trades_count"] >= 1
+
+    ai_analysis = report.get("ai_analysis") or {}
+    assert len(ai_analysis.get("stop_loss_analysis", [])) >= 1
+    assert len(ai_analysis.get("target_hit_analysis", [])) >= 1
+    assert len(ai_analysis.get("trade_decision_analysis", [])) >= 1
+    assert len(ai_analysis.get("key_lessons_learned", [])) >= 1
+
+    # Verify Stop-Loss hit details
+    sl_info = ai_analysis["stop_loss_analysis"][0]
+    assert "market_conditions" in sl_info
+    assert "technical_indicators" in sl_info
+    assert "failure_reasons" in sl_info
+
+    # Verify Target hit details
+    tgt_info = ai_analysis["target_hit_analysis"][0]
+    assert "market_trends" in tgt_info
+    assert "supporting_indicators" in tgt_info
+    assert "success_factors" in tgt_info
+
+    # Verify Decision Analysis
+    dec_info = ai_analysis["trade_decision_analysis"][0]
+    assert "initial_verdict" in dec_info
+    assert "actual_market_movement" in dec_info
+
+    # Verify Markdown report
+    md = report.get("markdown_report") or ""
+    assert "Stop-Loss Hit Analysis" in md
+    assert "Target Hit Analysis" in md
+    assert "Key Lessons Learned" in md
+    assert "Executed Trades Journal" in md
+
+    # Clean up
+    await engine.reset_portfolio(1000000.0)
