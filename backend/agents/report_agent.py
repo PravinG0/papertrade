@@ -129,7 +129,9 @@ class ReportAgent:
                 stmt = select(DailyReportModel).where(DailyReportModel.id == report_id)
                 existing = (await session.execute(stmt)).scalars().first()
                 if existing:
-                    return existing.to_dict()
+                    data = existing.to_dict()
+                    data["executed_trades"] = await paper_engine.get_daily_trades(target_date, user_id=user_id)
+                    return data
 
         return await self.generate_daily_report(target_date, user_id=user_id)
 
@@ -274,7 +276,9 @@ class ReportAgent:
                 )
                 session.add(db_report)
             await session.commit()
-            return db_report.to_dict()
+            data = db_report.to_dict()
+            data["executed_trades"] = trades
+            return data
 
     async def _generate_ai_analysis(
         self,

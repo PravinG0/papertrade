@@ -91,6 +91,55 @@ export default function DailyReportModal({ isOpen, onClose }) {
   const isNetProfit = Number(netPnl) >= 0;
   const executedTrades = report?.executed_trades || analysis.executed_trades || [];
 
+  // Helper to safely extract string text from potentially complex or nested structures
+  const safeText = (val, fallback = '') => {
+    if (typeof val === 'string') return val;
+    if (typeof val === 'number') return String(val);
+    if (!val) return fallback;
+    if (typeof val === 'object') {
+      if (val.overall_critique) return String(val.overall_critique);
+      if (val.reasons) return String(val.reasons);
+      if (val.explanation) return String(val.explanation);
+      if (val.analysis) return String(val.analysis);
+      if (val.evaluation) return String(val.evaluation);
+      return fallback;
+    }
+    return fallback;
+  };
+
+  const executiveSummaryText =
+    safeText(analysis.executive_summary) ||
+    safeText(analysis.performance_summary) ||
+    (analysis.performance_summary?.overall_critique
+      ? `${analysis.performance_summary.overall_critique} (Risk Rating: ${analysis.performance_summary.risk_discipline_rating || 'Disciplined'})`
+      : '') ||
+    (report?.report_markdown ? report.report_markdown.slice(0, 500) : '') ||
+    'Detailed trade analysis recorded for this session.';
+
+  const keyLessons = Array.isArray(analysis.key_lessons_learned)
+    ? analysis.key_lessons_learned
+    : Array.isArray(analysis.key_lessons)
+    ? analysis.key_lessons
+    : Array.isArray(analysis.performance_summary?.key_lessons)
+    ? analysis.performance_summary.key_lessons
+    : [];
+
+  const targetHits = Array.isArray(analysis.target_hit_analysis)
+    ? analysis.target_hit_analysis
+    : [];
+
+  const slHits = Array.isArray(analysis.stop_loss_analysis)
+    ? analysis.stop_loss_analysis
+    : Array.isArray(analysis.stop_loss_hit_analysis)
+    ? analysis.stop_loss_hit_analysis
+    : [];
+
+  const decisionAudits = Array.isArray(analysis.trade_decision_analysis)
+    ? analysis.trade_decision_analysis
+    : Array.isArray(analysis.agent_audits)
+    ? analysis.agent_audits
+    : [];
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="bg-[#ffffff] border border-slate-800 rounded-2xl w-full max-w-5xl max-h-[92vh] flex flex-col shadow-2xl shadow-indigo-950/40 overflow-hidden font-sans">
@@ -339,7 +388,7 @@ export default function DailyReportModal({ isOpen, onClose }) {
                       </h4>
                     </div>
                     <div className="text-xs text-slate-300 leading-relaxed space-y-2 whitespace-pre-line font-sans">
-                      {analysis.performance_summary || analysis.executive_summary || report.report_markdown?.slice(0, 500) || 'Detailed trade analysis recorded.'}
+                      {executiveSummaryText}
                     </div>
                   </div>
 
@@ -352,10 +401,12 @@ export default function DailyReportModal({ isOpen, onClose }) {
                       </h4>
                     </div>
                     <ul className="space-y-2 text-xs text-slate-300 font-sans list-disc list-inside">
-                      {Array.isArray(analysis.key_lessons) && analysis.key_lessons.length > 0 ? (
-                        analysis.key_lessons.map((lesson, idx) => (
+                      {keyLessons.length > 0 ? (
+                        keyLessons.map((lesson, idx) => (
                           <li key={idx} className="leading-snug">
-                            <span className="text-slate-200 font-medium">{lesson}</span>
+                            <span className="text-slate-200 font-medium">
+                              {typeof lesson === 'string' ? lesson : lesson?.lesson || JSON.stringify(lesson)}
+                            </span>
                           </li>
                         ))
                       ) : (
@@ -383,35 +434,62 @@ export default function DailyReportModal({ isOpen, onClose }) {
                     </span>
                   </div>
 
-                  {Array.isArray(analysis.target_hit_analysis) && analysis.target_hit_analysis.length > 0 ? (
-                    analysis.target_hit_analysis.map((item, idx) => (
-                      <div key={idx} className="p-4 bg-slate-900/90 rounded-xl border border-slate-800 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-xs text-emerald-400 flex items-center gap-1.5 font-sans">
-                            <CheckCircle2 size={13} />
-                            <span>{item.symbol || `Trade #${idx + 1}`}</span>
-                          </span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
-                            +₹{Number(item.realized_pnl || item.pnl || 0).toFixed(2)}
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                          {item.reasons || item.analysis || item.explanation}
-                        </p>
-                        {item.supporting_indicators && (
-                          <div className="flex flex-wrap gap-1.5 pt-1">
-                            {item.supporting_indicators.map((ind, i) => (
-                              <span key={i} className="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-cyan-300 font-mono">
-                                {ind}
-                              </span>
-                            ))}
+                  {targetHits.length > 0 ? (
+                    targetHits.map((item, idx) => {
+                      const pnl = Number(item.profit_amount ?? item.realized_pnl ?? item.pnl ?? 0);
+                      return (
+                        <div key={idx} className="p-4 bg-slate-900/90 rounded-xl border border-slate-800 space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-xs text-emerald-400 flex items-center gap-1.5 font-sans">
+                              <CheckCircle2 size={13} />
+                              <span>{item.symbol || `Trade #${idx + 1}`}</span>
+                              {item.entry_price && item.exit_price && (
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  (₹{Number(item.entry_price).toFixed(2)} → ₹{Number(item.exit_price).toFixed(2)})
+                                </span>
+                              )}
+                            </span>
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
+                              +₹{pnl.toFixed(2)}
+                            </span>
                           </div>
-                        )}
-                      </div>
-                    ))
+
+                          {(item.market_trends || item.reasons || item.analysis || item.explanation) && (
+                            <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                              {item.market_trends || item.reasons || item.analysis || item.explanation}
+                            </p>
+                          )}
+
+                          {item.supporting_indicators && (
+                            <div className="text-xs text-cyan-300 font-sans bg-cyan-950/30 p-2.5 rounded-lg border border-cyan-900/40">
+                              <span className="font-bold uppercase text-[10px] text-cyan-400 tracking-wider block mb-1">
+                                Supporting Confluence
+                              </span>
+                              {Array.isArray(item.supporting_indicators) ? (
+                                <div className="flex flex-wrap gap-1.5">
+                                  {item.supporting_indicators.map((ind, i) => (
+                                    <span key={i} className="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-cyan-300 font-mono">
+                                      {typeof ind === 'string' ? ind : JSON.stringify(ind)}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span>{String(item.supporting_indicators)}</span>
+                              )}
+                            </div>
+                          )}
+
+                          {(item.success_factors || item.key_takeaway) && (
+                            <div className="text-[11px] text-emerald-300/90 font-sans bg-emerald-950/20 p-2 rounded-lg border border-emerald-900/30">
+                              <strong>Key Takeaway:</strong> {item.success_factors || item.key_takeaway}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
                   ) : (
                     <div className="p-4 bg-slate-900/90 rounded-xl border border-slate-800 text-xs text-slate-400 text-center py-8">
-                      {analysis.target_analysis_summary || 'No target-hit trades recorded for this session.'}
+                      {safeText(analysis.target_analysis_summary, 'No target-hit trades recorded for this session.')}
                     </div>
                   )}
                 </div>
@@ -427,31 +505,57 @@ export default function DailyReportModal({ isOpen, onClose }) {
                     </span>
                   </div>
 
-                  {Array.isArray(analysis.stop_loss_analysis) && analysis.stop_loss_analysis.length > 0 ? (
-                    analysis.stop_loss_analysis.map((item, idx) => (
-                      <div key={idx} className="p-4 bg-slate-900/90 rounded-xl border border-slate-800 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-xs text-rose-400 flex items-center gap-1.5 font-sans">
-                            <AlertTriangle size={13} />
-                            <span>{item.symbol || `Trade #${idx + 1}`}</span>
-                          </span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800">
-                            ₹{Number(item.realized_pnl || item.pnl || 0).toFixed(2)}
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                          {item.reasons || item.analysis || item.explanation}
-                        </p>
-                        {item.technical_breakdown && (
-                          <div className="text-[11px] text-slate-400 font-mono bg-slate-950/60 p-2 rounded-lg border border-slate-800">
-                            <strong>Technical Breakdown:</strong> {item.technical_breakdown}
+                  {slHits.length > 0 ? (
+                    slHits.map((item, idx) => {
+                      const loss = Number(item.loss_amount ?? item.realized_pnl ?? item.pnl ?? 0);
+                      return (
+                        <div key={idx} className="p-4 bg-slate-900/90 rounded-xl border border-slate-800 space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-xs text-rose-400 flex items-center gap-1.5 font-sans">
+                              <AlertTriangle size={13} />
+                              <span>{item.symbol || `Trade #${idx + 1}`}</span>
+                              {item.entry_price && item.exit_price && (
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  (₹{Number(item.entry_price).toFixed(2)} → ₹{Number(item.exit_price).toFixed(2)})
+                                </span>
+                              )}
+                            </span>
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800">
+                              {loss < 0 ? `-₹${Math.abs(loss).toFixed(2)}` : `₹${loss.toFixed(2)}`}
+                            </span>
                           </div>
-                        )}
-                      </div>
-                    ))
+
+                          {(item.reasons_for_failed_prediction || item.reasons || item.analysis || item.explanation) && (
+                            <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                              {item.reasons_for_failed_prediction || item.reasons || item.analysis || item.explanation}
+                            </p>
+                          )}
+
+                          {(item.technical_indicators || item.technical_breakdown || item.market_conditions) && (
+                            <div className="text-[11px] text-slate-400 font-mono bg-slate-950/60 p-2.5 rounded-lg border border-slate-800 space-y-1">
+                              {item.market_conditions && (
+                                <div><strong className="text-slate-300">Market Context:</strong> {item.market_conditions}</div>
+                              )}
+                              {item.technical_indicators && (
+                                <div><strong className="text-slate-300">Technical Breakdown:</strong> {typeof item.technical_indicators === 'string' ? item.technical_indicators : JSON.stringify(item.technical_indicators)}</div>
+                              )}
+                              {item.technical_breakdown && !item.technical_indicators && (
+                                <div><strong className="text-slate-300">Technical Breakdown:</strong> {typeof item.technical_breakdown === 'string' ? item.technical_breakdown : JSON.stringify(item.technical_breakdown)}</div>
+                              )}
+                            </div>
+                          )}
+
+                          {item.key_takeaway && (
+                            <div className="text-[11px] text-rose-300/90 font-sans bg-rose-950/20 p-2 rounded-lg border border-rose-900/30">
+                              <strong>Corrective Rule:</strong> {item.key_takeaway}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
                   ) : (
                     <div className="p-4 bg-slate-900/90 rounded-xl border border-slate-800 text-xs text-slate-400 text-center py-8">
-                      {analysis.sl_analysis_summary || 'No stop-loss hit trades recorded for this session.'}
+                      {safeText(analysis.sl_analysis_summary, 'No stop-loss hit trades recorded for this session.')}
                     </div>
                   )}
                 </div>
@@ -467,27 +571,75 @@ export default function DailyReportModal({ isOpen, onClose }) {
                     </span>
                   </div>
 
-                  <div className="p-4 bg-slate-900/90 rounded-2xl border border-slate-800 space-y-3 text-xs">
-                    <div className="text-slate-300 leading-relaxed whitespace-pre-line font-sans">
-                      {analysis.trade_decision_analysis || analysis.agent_decision_audit || 'All trade recommendations adhered to institutional risk parameters with ₹700 Max SL clamp.'}
-                    </div>
-
-                    {Array.isArray(analysis.agent_audits) && (
-                      <div className="space-y-2 pt-2">
-                        {analysis.agent_audits.map((a, i) => (
-                          <div key={i} className="p-3 bg-slate-950/70 rounded-xl border border-slate-800 text-xs space-y-1">
-                            <div className="flex items-center justify-between font-semibold">
-                              <span className="text-purple-300">{a.symbol || a.trade_id}</span>
-                              <span className={a.aligned ? 'text-emerald-400' : 'text-rose-400'}>
-                                {a.aligned ? '✓ Aligned with Market' : '✗ Diverged from Market'}
+                  {decisionAudits.length > 0 ? (
+                    <div className="space-y-3">
+                      {decisionAudits.map((item, idx) => {
+                        const isAligned =
+                          item.alignment_evaluation?.includes('CORRECT') ||
+                          item.aligned === true ||
+                          item.alignment?.toLowerCase()?.includes('align');
+                        return (
+                          <div key={idx} className="p-4 bg-slate-900/90 rounded-2xl border border-slate-800 space-y-2 text-xs">
+                            <div className="flex items-center justify-between font-semibold border-b border-slate-800 pb-2">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-slate-200">
+                                  {item.symbol || item.trade_id || `Trade #${idx + 1}`}
+                                </span>
+                                {item.initial_verdict && (
+                                  <span className="px-2 py-0.5 rounded text-[10px] bg-purple-950 text-purple-300 border border-purple-800 font-mono">
+                                    Verdict: {item.initial_verdict}
+                                  </span>
+                                )}
+                              </div>
+                              <span className={`text-[11px] font-bold ${isAligned ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {isAligned ? '✓ Aligned with Market' : '✗ Diverged from Market'}
                               </span>
                             </div>
-                            <p className="text-slate-400 text-[11px]">{a.evaluation}</p>
+
+                            {item.judge_rationale && (
+                              <div className="text-slate-300 leading-relaxed font-sans pt-1">
+                                <strong className="text-slate-400 text-[10px] uppercase tracking-wider block">AI Decision Thesis:</strong>
+                                {item.judge_rationale}
+                              </div>
+                            )}
+
+                            {item.actual_market_movement && (
+                              <div className="text-[11px] text-slate-400 font-mono bg-slate-950/60 p-2 rounded-lg border border-slate-800">
+                                <strong className="text-slate-300">Actual Price Action:</strong> {item.actual_market_movement}
+                              </div>
+                            )}
+
+                            {item.alignment_evaluation && (
+                              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                                {item.alignment_evaluation}
+                              </p>
+                            )}
+
+                            {item.evaluation && !item.alignment_evaluation && (
+                              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                                {item.evaluation}
+                              </p>
+                            )}
+
+                            {item.agent_calibration_feedback && (
+                              <div className="text-[11px] text-indigo-300/90 font-sans bg-indigo-950/20 p-2 rounded-lg border border-indigo-900/30">
+                                <strong>Agent Calibration Feedback:</strong> {item.agent_calibration_feedback}
+                              </div>
+                            )}
                           </div>
-                        ))}
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-slate-900/90 rounded-2xl border border-slate-800 space-y-3 text-xs">
+                      <div className="text-slate-300 leading-relaxed whitespace-pre-line font-sans">
+                        {safeText(
+                          analysis.trade_decision_analysis,
+                          safeText(analysis.agent_decision_audit, 'All trade recommendations adhered to institutional risk parameters with ₹700 Max SL clamp.')
+                        )}
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
               )}
 
