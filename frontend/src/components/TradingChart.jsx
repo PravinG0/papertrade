@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   createChart,
   CandlestickSeries,
@@ -8,7 +8,7 @@ import {
   CrosshairMode,
 } from 'lightweight-charts';
 import { getCandles } from '../api';
-import { RefreshCw, Eye, EyeOff, Columns, X } from 'lucide-react';
+import { RefreshCw, Columns, X } from 'lucide-react';
 
 const TIMEFRAMES = [
   { label: '1m', interval: '1m', range: '1d' },
@@ -58,41 +58,6 @@ function calculateVWAP(candles) {
   return vwap;
 }
 
-function generateMockCandles(symbol, interval, isOption = false, base = null) {
-  const isBank = symbol === 'BANKNIFTY';
-  let basePrice =
-    base ||
-    (isOption
-      ? 145.0
-      : symbol === 'BANKNIFTY'
-      ? 52150
-      : symbol === 'SENSEX'
-      ? 81650
-      : symbol === 'FINNIFTY'
-      ? 24450
-      : 24980);
-  const nowSec = Math.floor(Date.now() / 1000);
-  const stepSec = interval === '1m' ? 60 : interval === '5m' ? 300 : interval === '15m' ? 900 : 86400;
-  const count = 100;
-  const candles = [];
-  const startSec = nowSec - count * stepSec;
-
-  for (let i = 0; i < count; i++) {
-    const time = startSec + i * stepSec;
-    const volatility = isOption ? 8.5 : isBank ? 55 : 22;
-    const delta = (Math.random() - 0.49) * volatility;
-    const open = Math.max(1.0, Number(basePrice.toFixed(2)));
-    const close = Math.max(1.0, Number((basePrice + delta).toFixed(2)));
-    const high = Number((Math.max(open, close) + Math.random() * (isOption ? 5 : isBank ? 25 : 10)).toFixed(2));
-    const low = Math.max(0.5, Number((Math.min(open, close) - Math.random() * (isOption ? 5 : isBank ? 25 : 10)).toFixed(2)));
-    const volume = Math.floor(Math.random() * (isOption ? 20000 : 50000) + 5000);
-
-    candles.push({ time, open, high, low, close, volume });
-    basePrice = close;
-  }
-  return candles;
-}
-
 // Sub-component for each independent chart pane
 function ChartPane({
   title,
@@ -101,9 +66,11 @@ function ChartPane({
   initialTfIndex = 1,
   onPriceUpdate = null,
   badgeColor = 'cyan',
+  enabled = true,
 }) {
   const [selectedTf, setSelectedTf] = useState(TIMEFRAMES[initialTfIndex]);
   const [loading, setLoading] = useState(true);
+  const [candleError, setCandleError] = useState('');
   const [legendData, setLegendData] = useState(null);
   const [showEma20, setShowEma20] = useState(true);
   const [showEma50, setShowEma50] = useState(true);
@@ -117,84 +84,12 @@ function ChartPane({
   const ema50SeriesRef = useRef(null);
   const vwapSeriesRef = useRef(null);
 
-  const loadCandleData = useCallback(async (isSilent = false) => {
-    if (!isSilent) setLoading(true);
-    try {
-      const strike = contract?.strike;
-      const optionType = contract?.option_type;
-      const res = await getCandles(symbol, selectedTf.interval, selectedTf.range, strike, optionType);
-      let rawCandles = res.data?.candles || res.data?.data || res.data || [];
-
-      if (!Array.isArray(rawCandles) || rawCandles.length === 0) {
-        rawCandles = generateMockCandles(symbol, selectedTf.interval, Boolean(contract), contract?.ltp);
-      }
-
-      const sorted = [...rawCandles].sort((a, b) => a.time - b.time);
-      const cleanCandles = [];
-      const cleanVolume = [];
-      let prevTime = -1;
-
-      for (const c of sorted) {
-        const rawT = typeof c.time === 'number' ? c.time : Math.floor(new Date(c.time || c.timestamp || c.date).getTime() / 1000);
-        // lightweight-charts renders UTC; shift +5:30 so the axis shows IST (09:15 open, 15:30 close)
-        const t = rawT + 19800;
-        if (t > prevTime && !isNaN(c.open) && !isNaN(c.close)) {
-          const o = Number(c.open);
-          const cl = Number(c.close);
-          const h = Math.max(Number(c.high || o), o, cl);
-          const l = Math.min(Number(c.low || o), o, cl);
-          const vol = Number(c.volume || 0);
-
-          cleanCandles.push({ time: t, open: o, high: h, low: l, close: cl });
-          cleanVolume.push({
-            time: t,
-            value: vol,
-            color: cl >= o ? 'rgba(16, 185, 129, 0.4)' : 'rgba(244, 63, 94, 0.4)',
-          });
-          prevTime = t;
-        }
-      }
-
-      if (cleanCandles.length > 0 && candleSeriesRef.current) {
-        candleSeriesRef.current.setData(cleanCandles);
-        if (volumeSeriesRef.current) {
-          volumeSeriesRef.current.setData(cleanVolume);
-        }
-
-        const ema20 = calculateEMA(cleanCandles, 20);
-        const ema50 = calculateEMA(cleanCandles, 50);
-        const vwap = calculateVWAP(cleanCandles);
-
-        if (ema20SeriesRef.current) ema20SeriesRef.current.setData(ema20);
-        if (ema50SeriesRef.current) ema50SeriesRef.current.setData(ema50);
-        if (vwapSeriesRef.current) vwapSeriesRef.current.setData(vwap);
-
-        const latest = cleanCandles[cleanCandles.length - 1];
-        const prev = cleanCandles.length > 1 ? cleanCandles[cleanCandles.length - 2] : latest;
-        const change = latest.close - prev.close;
-        const changePct = prev.close > 0 ? (change / prev.close) * 100 : 0;
-
-        setLegendData({
-          open: latest.open,
-          high: latest.high,
-          low: latest.low,
-          close: latest.close,
-          volume: cleanVolume[cleanVolume.length - 1]?.value || 0,
-          change,
-          changePct,
-        });
-
-        if (onPriceUpdate) onPriceUpdate(latest.close);
-      }
-    } catch (err) {
-      const mock = generateMockCandles(symbol, selectedTf.interval, Boolean(contract), contract?.ltp);
-      if (candleSeriesRef.current) {
-        candleSeriesRef.current.setData(mock);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [symbol, contract, selectedTf, onPriceUpdate]);
+  const refreshRef = useRef(null);
+  const priceCallbackRef = useRef(onPriceUpdate);
+  priceCallbackRef.current = onPriceUpdate;
+  const strike = contract?.strike;
+  const optionType = contract?.option_type;
+  const expiry = contract?.expiry;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -202,9 +97,7 @@ function ChartPane({
 
     let chart = null;
     let ro = null;
-    let animId = null;
-
-    animId = requestAnimationFrame(() => {
+    {
       if (!containerRef.current) return;
       const initialWidth = containerRef.current.clientWidth || 400;
       const initialHeight = containerRef.current.clientHeight || 260;
@@ -326,10 +219,9 @@ function ChartPane({
         }
       });
       ro.observe(container);
-    });
+    }
 
     return () => {
-      if (animId) cancelAnimationFrame(animId);
       if (ro) ro.disconnect();
       if (chart) chart.remove();
     };
@@ -348,10 +240,87 @@ function ChartPane({
   }, [showEma50]);
 
   useEffect(() => {
-    loadCandleData();
-    const interval = setInterval(() => loadCandleData(true), 4000);
-    return () => clearInterval(interval);
-  }, [loadCandleData]);
+    if (!enabled || !candleSeriesRef.current) return;
+    const controller = new AbortController();
+    let timer;
+    let busy = false;
+    let previous = '';
+    for (const series of [candleSeriesRef, volumeSeriesRef, ema20SeriesRef, ema50SeriesRef, vwapSeriesRef]) {
+      series.current?.setData([]);
+    }
+    setLegendData(null);
+    setCandleError('');
+
+    async function load(showLoading = false) {
+      if (busy || controller.signal.aborted) return;
+      clearTimeout(timer);
+      busy = true;
+      if (showLoading) setLoading(true);
+      try {
+        const res = await getCandles(symbol, selectedTf.interval, selectedTf.range, strike, optionType, expiry, controller.signal);
+        if (controller.signal.aborted) return;
+        const raw = res.data?.candles || res.data?.data || res.data;
+        const byTime = new Map();
+        for (const candle of Array.isArray(raw) ? raw : []) {
+          const utcTime = typeof candle.time === 'number'
+            ? candle.time
+            : Math.floor(Date.parse(candle.time || candle.timestamp || candle.date) / 1000);
+          const [open, high, low, close] = [candle.open, candle.high, candle.low, candle.close].map(Number);
+          if ([utcTime, open, high, low, close].every(Number.isFinite)) {
+            const time = utcTime + 19800; // Display candle times in IST.
+            byTime.set(time, {
+              time, open, high: Math.max(high, open, close), low: Math.min(low, open, close), close,
+              volume: Number(candle.volume) || 0,
+            });
+          }
+        }
+        const candles = [...byTime.values()].sort((a, b) => a.time - b.time);
+        if (!candles.length) {
+          setCandleError(previous ? 'New candles unavailable. Showing last received data.' : 'Candle data unavailable.');
+          return;
+        }
+        setCandleError('');
+        const snapshot = JSON.stringify(candles);
+        if (snapshot === previous) return;
+
+        candleSeriesRef.current.setData(candles);
+        volumeSeriesRef.current?.setData(candles.map(({ time, volume, open, close }) => ({
+          time,
+          value: volume,
+          color: close >= open ? 'rgba(16, 185, 129, 0.4)' : 'rgba(244, 63, 94, 0.4)',
+        })));
+        ema20SeriesRef.current?.setData(calculateEMA(candles, 20));
+        ema50SeriesRef.current?.setData(calculateEMA(candles, 50));
+        vwapSeriesRef.current?.setData(calculateVWAP(candles));
+        if (!previous) chartRef.current.timeScale().fitContent();
+        previous = snapshot;
+
+        const latest = candles.at(-1);
+        const prior = candles.at(-2) || latest;
+        const change = latest.close - prior.close;
+        setLegendData({ ...latest, change, changePct: prior.close > 0 ? (change / prior.close) * 100 : 0 });
+        priceCallbackRef.current?.(latest.close);
+      } catch {
+        if (!controller.signal.aborted) {
+          setCandleError(previous ? 'New candles unavailable. Showing last received data.' : 'Candle data unavailable.');
+        }
+      } finally {
+        busy = false;
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          timer = setTimeout(load, 6000);
+        }
+      }
+    }
+
+    refreshRef.current = () => load(true);
+    load(true);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+      refreshRef.current = null;
+    };
+  }, [symbol, selectedTf, strike, optionType, expiry, enabled]);
 
   return (
     <div className="flex flex-col h-full bg-[#f4f6fa] border border-slate-800 rounded-lg overflow-hidden">
@@ -438,7 +407,7 @@ function ChartPane({
 
           {/* Refresh */}
           <button
-            onClick={() => loadCandleData(false)}
+            onClick={() => refreshRef.current?.()}
             disabled={loading}
             className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors border border-slate-700"
             title="Refresh"
@@ -466,7 +435,14 @@ function ChartPane({
       )}
 
       {/* Canvas */}
-      <div ref={containerRef} className="flex-1 w-full min-h-[180px] relative" />
+      <div className="flex-1 w-full min-h-[180px] relative overflow-hidden">
+        <div ref={containerRef} className="absolute inset-0" />
+        {candleError && (
+          <div role="status" className="absolute top-2 left-2 bg-white/95 px-2 py-1 text-xs text-slate-700">
+            {candleError}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -476,21 +452,21 @@ export default function TradingChart({
   contract = null,
   onClearContract = () => {},
   onSelectIndex = () => {},
-  onPriceUpdate = () => {},
 }) {
   const [dualSplit, setDualSplit] = useState(false);
   const [lastSpot, setLastSpot] = useState(null);
   const [atmSide, setAtmSide] = useState('CE');
 
-  const handlePrice = (p) => {
-    if (typeof p === 'number' && !isNaN(p)) setLastSpot(p);
-    onPriceUpdate(p);
-  };
-
-  // Compare view: a picked contract, otherwise the real ATM strike from the live spot price
-  const STEP = { NIFTY: 50, FINNIFTY: 50, BANKNIFTY: 100, SENSEX: 100 };
-  const atmStrike = lastSpot ? Math.round(lastSpot / (STEP[selectedIndex] || 50)) * (STEP[selectedIndex] || 50) : null;
+  const step = { NIFTY: 50, FINNIFTY: 50, BANKNIFTY: 100, SENSEX: 100 }[selectedIndex] || 50;
+  const atmStrike = lastSpot?.symbol === selectedIndex ? Math.round(lastSpot.price / step) * step : null;
   const compareContract = contract || (atmStrike ? { strike: atmStrike, option_type: atmSide } : null);
+
+  function captureSpot(price) {
+    setLastSpot((previous) => {
+      if (dualSplit && previous?.symbol === selectedIndex) return previous;
+      return { symbol: selectedIndex, price };
+    });
+  }
 
   // Close the compare view with Escape
   useEffect(() => {
@@ -565,7 +541,8 @@ export default function TradingChart({
             symbol={selectedIndex}
             contract={contract}
             initialTfIndex={2} // 15m default
-            onPriceUpdate={handlePrice}
+            enabled={!dualSplit}
+            onPriceUpdate={contract ? null : captureSpot}
             badgeColor={contract ? 'amber' : 'cyan'}
           />
         </div>
@@ -610,19 +587,18 @@ export default function TradingChart({
             <div className="flex-1 overflow-y-auto p-2 flex flex-col md:flex-row gap-2">
               <div className="flex-none h-[340px] md:h-auto md:flex-1 min-w-0">
                 <ChartPane
-                  title={`${selectedIndex} Spot (5m)`}
+                  title={`${selectedIndex} Spot`}
                   symbol={selectedIndex}
                   contract={null}
                   initialTfIndex={1}
-                  onPriceUpdate={handlePrice}
+                  onPriceUpdate={captureSpot}
                   badgeColor="cyan"
                 />
               </div>
               <div className="flex-none h-[340px] md:h-auto md:flex-1 min-w-0">
                 {compareContract ? (
                   <ChartPane
-                    key={`${compareContract.strike}-${compareContract.option_type}`}
-                    title={`${selectedIndex} ${compareContract.strike} ${compareContract.option_type}`}
+                      title={`${selectedIndex} ${compareContract.strike} ${compareContract.option_type}`}
                     symbol={selectedIndex}
                     contract={compareContract}
                     initialTfIndex={0}

@@ -234,6 +234,7 @@ class PaperEngine:
                 "wallet": wallet_dict,
                 "portfolio": wallet_dict,
                 "positions": user_positions,
+                "recent_closed_positions": closed_trades[:50],
                 "active_orders": user_orders,
                 "orders": user_orders,
                 "statistics": {

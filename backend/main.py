@@ -99,7 +99,7 @@ async def _periodic_mtm_loop() -> None:
             # Only update live prices if replay mode is not active and positions exist
             if not replay_engine.is_replaying and has_work:
                 quotes_dict: dict[str, float] = {}
-                live_feed = angel_service.data_source == "live"
+                live_feed = angel_service.is_configured()
 
                 if live_feed:
                     # REAL option LTPs straight from Angel One (matches broker terminal)
@@ -409,25 +409,27 @@ async def get_candles(
     range_period: str = Query(default="5d"),
     strike: Optional[float] = Query(default=None),
     option_type: Optional[str] = Query(default=None),
+    expiry: Optional[str] = Query(default=None),
 ):
     """Return historical candlestick data for spot index or specific option strike contract."""
-    if replay_engine.is_replaying and replay_engine.symbol == normalize_index_symbol(symbol):
+    norm = normalize_index_symbol(symbol)
+    replaying_symbol = replay_engine.is_replaying and replay_engine.symbol == norm
+    if strike and option_type and not replaying_symbol and angel_service.is_configured():
+        await angel_service.ensure_contracts()
+        expiries = scrip_master.expiries(norm)
+        selected_expiry = expiry or (expiries[0] if expiries else None)
+        contract = scrip_master.contract(norm, selected_expiry, int(strike), option_type.upper()) if selected_expiry else None
+        if not contract:
+            return []
+        return await angel_service.get_candles(
+            symbol=symbol, interval=interval, range_period=range_period, contract=contract
+        )
+
+    if replaying_symbol:
         # Return replayed candles up to current candle index
         candles = replay_engine.candles[: replay_engine.candle_index + 1]
     else:
         candles = await angel_service.get_candles(symbol=symbol, interval=interval, range_period=range_period)
-
-    # Option contract chart: use the contract's REAL Angel One candles when available
-    if strike and option_type and not replay_engine.is_replaying:
-        await angel_service.ensure_contracts()
-        norm = normalize_index_symbol(symbol)
-        exps = scrip_master.expiries(norm)
-        c = scrip_master.contract(norm, exps[0], int(strike), option_type.upper()) if exps else None
-        if c:
-            real = await angel_service.get_candles(
-                symbol=symbol, interval=interval, range_period=range_period, contract=c)
-            if real:
-                return real
 
     # Offline fallback: translate spot candles to option candles via Black-Scholes
     if strike and option_type:

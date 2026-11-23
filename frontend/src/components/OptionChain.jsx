@@ -566,7 +566,7 @@ export default function OptionChain({
                         <td className={`py-1.5 px-2 text-center border-r border-slate-800 ${isCeItm ? 'bg-amber-500/[0.07]' : ''}`}>
                           <div className="flex items-center justify-center gap-1 font-sans">
                             <button
-                              onClick={() => onSelectContract({ strike, option_type: 'CE' })}
+                              onClick={() => onSelectContract({ strike, option_type: 'CE', expiry: selectedExpiry })}
                               className="max-sm:hidden p-1 rounded text-cyan-400 hover:bg-cyan-950/80 hover:text-cyan-200 transition-colors"
                               title={`View ${selectedIndex} ${strike} CE Candlestick Chart`}
                             >
@@ -720,7 +720,7 @@ export default function OptionChain({
                               </>
                             )}
                             <button
-                              onClick={() => onSelectContract({ strike, option_type: 'PE' })}
+                              onClick={() => onSelectContract({ strike, option_type: 'PE', expiry: selectedExpiry })}
                               className="max-sm:hidden p-1 rounded text-cyan-400 hover:bg-cyan-950/80 hover:text-cyan-200 transition-colors"
                               title={`View ${selectedIndex} ${strike} PE Candlestick Chart`}
                             >

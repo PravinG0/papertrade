@@ -439,7 +439,7 @@ class AngelService:
             spec["token"] = contract.token
 
         angel_interval = INTERVAL_MAP.get(interval.lower(), INTERVAL_MAP.get(interval, "FIVE_MINUTE"))
-        cache_key = f"{spec['token']}_{angel_interval}_{range_period.lower()}"
+        cache_key = f"{spec['exchange']}_{spec['token']}_{angel_interval}_{range_period.lower()}"
         now = time.time()
         ttl = 60.0 if angel_interval == "ONE_DAY" else 5.0
 
@@ -467,7 +467,7 @@ class AngelService:
                 days = 60
 
             from_date = (now_dt - timedelta(days=days)).strftime("%Y-%m-%d 09:15")
-            to_date = now_dt.strftime("%Y-%m-%d 15:30")
+            to_date = min(now_dt, now_dt.replace(hour=15, minute=30)).strftime("%Y-%m-%d %H:%M")
 
             headers = self._base_headers()
             headers["Authorization"] = f"Bearer {self._jwt_token}"
@@ -501,6 +501,8 @@ class AngelService:
                         vol = row[5] if len(row) > 5 else 0
                         try:
                             dt = datetime.fromisoformat(ts_str)
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=IST)
                             t = int(dt.timestamp())
                             o_f, h_f, l_f, c_f, v_f = float(o), float(h), float(l), float(c), float(vol)
                         except (ValueError, TypeError):
@@ -534,7 +536,7 @@ class AngelService:
             except Exception as exc:
                 logger.warning("Error fetching historical candles for %s: %s", sym_norm, exc)
 
-        if contract is not None:
+        if contract is not None or self.is_configured():
             return []
 
         # Fallback realistic candle generation

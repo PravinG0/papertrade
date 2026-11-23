@@ -12,6 +12,7 @@ import {
 
 export default function PositionsPanel({
   positions = [],
+  closedPositions = [],
   portfolio = {},
   onExitPosition = () => {},
   onExitAllPositions = () => {},
@@ -21,6 +22,7 @@ export default function PositionsPanel({
   const [savingSl, setSavingSl] = useState({});
   const [exitingId, setExitingId] = useState(null);
   const [exitingAll, setExitingAll] = useState(false);
+  const [showClosed, setShowClosed] = useState(false);
 
   const unrealizedPnl = portfolio?.unrealized_pnl ?? positions.reduce((acc, p) => acc + (p.pnl || p.unrealized_pnl || 0), 0);
   const marginUsed = portfolio?.margin_used ?? positions.reduce((acc, p) => acc + (p.invested_amount || p.margin || 0), 0);
@@ -68,11 +70,18 @@ export default function PositionsPanel({
         <div className="flex items-center gap-2">
           <Activity size={16} className="text-cyan-400" />
           <h3 className="text-xs font-bold uppercase tracking-wider text-ink">
-            Active Positions ({positions.length})
+            {showClosed ? 'Recent Closed Positions' : `Active Positions (${positions.length})`}
           </h3>
         </div>
 
-        {positions.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowClosed((closed) => !closed)}
+          className="px-2 py-1 text-xs font-semibold text-cyan-700 hover:underline"
+        >
+          {showClosed ? 'Show open positions' : 'Show closed positions'}
+        </button>
+        {!showClosed && positions.length > 0 && (
           <button
             onClick={handleExitAll}
             disabled={exitingAll}
@@ -84,7 +93,40 @@ export default function PositionsPanel({
         )}
       </div>
 
-      {/* Positions Table */}
+      {showClosed ? (
+        <div className="flex-1 overflow-auto">
+          {closedPositions.length === 0 ? (
+            <p className="p-4 text-sm text-slate-500">No closed positions yet.</p>
+          ) : (
+            <table className="w-full min-w-[520px] text-left text-xs">
+              <thead className="bg-slate-100 text-slate-600">
+                <tr>
+                  <th className="p-2">Instrument</th>
+                  <th className="p-2">Entry (₹)</th>
+                  <th className="p-2">Exit (₹)</th>
+                  <th className="p-2">Net P&amp;L (₹)</th>
+                  <th className="p-2">Exit reason</th>
+                  <th className="p-2">Closed at (IST)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {closedPositions.map((trade) => (
+                  <tr key={trade.id} className="border-b border-slate-200">
+                    <td className="p-2 font-semibold">{trade.symbol}</td>
+                    <td className="p-2">{trade.entry_price?.toFixed(2)}</td>
+                    <td className="p-2">{trade.exit_price?.toFixed(2)}</td>
+                    <td className={trade.realized_pnl < 0 ? 'p-2 text-rose-700' : 'p-2 text-emerald-700'}>
+                      {trade.realized_pnl?.toFixed(2)}
+                    </td>
+                    <td className="p-2">{trade.exit_reason?.replaceAll('_', ' ') || '—'}</td>
+                    <td className="p-2 whitespace-nowrap">{trade.closed_at?.replace('T', ' ').slice(0, 19)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ) : (
       <div className="flex-1 overflow-x-auto overflow-y-auto">
         <table className="w-full min-w-[560px] border-collapse text-xs select-none">
           <thead>
@@ -218,6 +260,7 @@ export default function PositionsPanel({
           </tbody>
         </table>
       </div>
+      )}
 
       {/* Bottom Summary Bar */}
       <div className="p-2.5 bg-[#f4f6fa] border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
@@ -241,7 +284,7 @@ export default function PositionsPanel({
           </div>
         </div>
 
-        {positions.length > 0 && (
+        {!showClosed && positions.length > 0 && (
           <button
             onClick={handleExitAll}
             disabled={exitingAll}

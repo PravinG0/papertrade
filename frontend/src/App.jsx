@@ -57,6 +57,7 @@ export default function App() {
     available_margin: 1000000,
   });
   const [positions, setPositions] = useState([]);
+  const [closedPositions, setClosedPositions] = useState([]);
   const [orders, setOrders] = useState([]);
 
   // Replay State
@@ -91,12 +92,6 @@ export default function App() {
     (data) => setOrderModalData({ ...data, marketOpen: feedInfo.marketOpen }),
     [feedInfo.marketOpen]
   );
-  const handlePriceUpdate = useCallback((p) => {
-    if (typeof p === 'number' && !isNaN(p)) {
-      setSpotPrice((prev) => (Math.abs(prev - p) > 0.05 ? p : prev));
-    }
-  }, []);
-
   // Toast feedback
   const [toast, setToast] = useState(null);
 
@@ -186,12 +181,16 @@ export default function App() {
   }, [selectedIndex]);
 
   // Sync portfolio and trading state
-  const tradingSyncBusy = useRef(false);
+  const tradingSyncRequest = useRef(null);
+  const tradingToken = useRef(token);
+  tradingToken.current = token;
   const syncTradingState = useCallback(async () => {
-    if (tradingSyncBusy.current) return; // previous poll still in flight - don't pile up
-    tradingSyncBusy.current = true;
+    if (tradingSyncRequest.current?.token === token) return;
+    const request = { token };
+    tradingSyncRequest.current = request;
     try {
       const res = await getTradingState();
+      if (tradingToken.current !== token) return;
       const data = res.data || {};
       if (data.portfolio) {
         setPortfolio(data.portfolio);
@@ -199,20 +198,27 @@ export default function App() {
       if (Array.isArray(data.positions)) {
         setPositions(data.positions);
       }
+      if (Array.isArray(data.recent_closed_positions)) {
+        setClosedPositions(data.recent_closed_positions);
+      }
       if (Array.isArray(data.orders)) {
         setOrders(data.orders);
       }
     } catch (e) {
       // Keep existing state on error
     } finally {
-      tradingSyncBusy.current = false;
+      if (tradingSyncRequest.current === request) tradingSyncRequest.current = null;
     }
-  }, []);
+  }, [token]);
 
   // Re-sync portfolio & trade history when user logs in or out
   useEffect(() => {
+    setPositions([]);
+    setClosedPositions([]);
+    setOrders([]);
+    prevPositionsCountRef.current = 0;
     syncTradingState();
-  }, [user, token, syncTradingState]);
+  }, [syncTradingState]);
 
   // Sync replay state
   const syncReplayState = useCallback(async () => {
@@ -270,6 +276,7 @@ export default function App() {
             if (data.type === 'INIT') {
               if (data.trading_state?.portfolio) setPortfolio(data.trading_state.portfolio);
               if (Array.isArray(data.trading_state?.positions)) setPositions(data.trading_state.positions);
+              if (Array.isArray(data.trading_state?.recent_closed_positions)) setClosedPositions(data.trading_state.recent_closed_positions);
               if (Array.isArray(data.trading_state?.orders)) setOrders(data.trading_state.orders);
               if (data.replay_state) setReplayState(data.replay_state);
             } else if (data.type === 'TICK') {
@@ -306,6 +313,7 @@ export default function App() {
               if (matchesUser) {
                 if (data.trading_state?.portfolio) setPortfolio(data.trading_state.portfolio);
                 if (Array.isArray(data.trading_state?.positions)) setPositions(data.trading_state.positions);
+                if (Array.isArray(data.trading_state?.recent_closed_positions)) setClosedPositions(data.trading_state.recent_closed_positions);
                 if (Array.isArray(data.trading_state?.orders)) setOrders(data.trading_state.orders);
               }
             }
@@ -621,7 +629,6 @@ export default function App() {
                     setSelectedIndex(idx);
                     setSelectedContract(null);
                   }}
-                  onPriceUpdate={handlePriceUpdate}
                 />
               </div>
 
@@ -659,6 +666,7 @@ export default function App() {
                   {rightBottomTab === 'positions' ? (
                     <PositionsPanel
                       positions={positions}
+                      closedPositions={closedPositions}
                       portfolio={portfolio}
                       onExitPosition={handleExitPosition}
                       onExitAllPositions={handleExitAllPositions}

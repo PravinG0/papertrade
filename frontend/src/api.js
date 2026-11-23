@@ -65,8 +65,9 @@ export const getStatus = () => api.get('/status');
 
 export const getIndices = () => api.get('/indices');
 
-export const getCandles = (symbol = 'NIFTY', interval = '15m', range_period = '5d', strike = null, option_type = null) =>
+export const getCandles = (symbol = 'NIFTY', interval = '15m', range_period = '5d', strike = null, option_type = null, expiry = null, signal) =>
   api.get('/candles', {
+    signal,
     params: {
       symbol,
       interval,
@@ -74,6 +75,7 @@ export const getCandles = (symbol = 'NIFTY', interval = '15m', range_period = '5
       range_period,
       ...(strike ? { strike } : {}),
       ...(option_type ? { option_type } : {}),
+      ...(expiry ? { expiry } : {}),
     },
   });
 

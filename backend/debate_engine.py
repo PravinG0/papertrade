@@ -288,6 +288,8 @@ class DebateEngine:
 
         # 2. Candlestick feed (5-minute interval)
         candles = await angel_service.get_candles(sym, interval="5m", range_period="5d")
+        if not candles:
+            raise ValueError(f"Historical candle data for {sym} is unavailable; debate skipped.")
         if candles and len(candles) > 60:
             candles = candles[-60:]
         tech = _calc_indicators(candles, spot)
@@ -466,7 +468,7 @@ class DebateEngine:
         if quote:
             entry_price = quote["ltp"]
             order_symbol = quote["symbol"]
-        elif angel_service.data_source == "live":
+        elif angel_service.is_configured():
             raise ValueError(f"Live price for {underlying} {int(strike)} {opt_type} is unavailable; trade not executed.")
         else:
             entry_price = judge_entry if judge_entry > 0 else 120.0
@@ -506,8 +508,8 @@ class DebateEngine:
         }
 
         order_res = await paper_engine.place_order(order_req, user_id=user_id)
-        if order_res.get("status") == "REJECTED":
-            raise ValueError(order_res.get("reject_reason", "Order rejected."))
+        if order_res.get("status") != "EXECUTED" or not order_res.get("position_id"):
+            raise ValueError(order_res.get("reject_reason") or order_res.get("message") or "Order did not open a position.")
 
         session.executed = True
         session.auto_executed = auto
