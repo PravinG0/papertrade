@@ -69,3 +69,20 @@ async def test_pending_fill_rechecks_balance_and_restores():
     state = await restored.get_state()
     assert state['portfolio']['available_margin'] == 100
     assert not state['positions']
+
+
+@pytest.mark.asyncio
+async def test_wallet_reset_preserves_history_and_rebases_pnl():
+    await init_db()
+    engine = PaperEngine()
+    await engine.reset_portfolio(1000000)
+    placed = await engine.place_order(order(stop_loss=90), enforce_hours=False)
+    await engine.update_market_prices({order()['symbol']: 75})
+    state = await engine.get_state()
+    assert state['portfolio']['account_net_pnl'] < 0
+    assert state['portfolio']['historical_balance_difference'] == 0
+    await engine.reset_portfolio(1000000)
+    reset = await engine.get_state()
+    assert reset['portfolio']['account_net_pnl'] == 0
+    assert reset['portfolio']['current_cycle_trade_pnl'] == 0
+    assert any(t['id'] == placed['position_id'] for t in reset['all_trades'])

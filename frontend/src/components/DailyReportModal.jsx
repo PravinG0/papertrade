@@ -142,7 +142,7 @@ export default function DailyReportModal({ isOpen, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-[#ffffff] border border-slate-800 rounded-2xl w-full max-w-5xl max-h-[92vh] flex flex-col shadow-2xl shadow-indigo-950/40 overflow-hidden font-sans">
+      <div className="mobile-dialog bg-[#ffffff] border border-slate-800 rounded-2xl w-full max-w-5xl max-h-[92vh] flex flex-col shadow-2xl shadow-indigo-950/40 overflow-hidden font-sans">
         {/* Header Bar */}
         <div className="p-4 bg-[#f4f6fa] border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-3">

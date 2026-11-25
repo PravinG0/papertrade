@@ -40,7 +40,16 @@ export default function App() {
   const [terminalTab, setTerminalTab] = useState('trade');
   const [historyView, setHistoryView] = useState('trades');
   const [exporting, setExporting] = useState(false);
-  const openTerminal = (tab = 'trade') => { setActiveTab('terminal'); setTerminalTab(tab); };
+  const openTerminal = (tab = 'trade') => {
+    setActiveTab('terminal'); setTerminalTab(tab);
+    // When switching a sticky mobile tab deep in the ledger, return to the start of the content.
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      const main = document.querySelector('.app-main');
+      if (main && main.getBoundingClientRect().top < 0) {
+        window.scrollTo({ top: Math.max(0, main.getBoundingClientRect().top + window.scrollY), behavior: 'auto' });
+      }
+    }
+  };
   const openDebateHistory = () => { setHistoryView('debates'); openTerminal('history'); };
   const [rightBottomTab, setRightBottomTab] = useState('positions'); // 'positions' | 'orders'
   const [selectedIndex, setSelectedIndex] = useState('NIFTY');
@@ -546,7 +555,7 @@ export default function App() {
   }, [handleExitAllPositions]);
 
   return (
-    <div className="min-h-screen bg-[#f4f6fa] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/20">
+    <div className="tradelab-app min-h-screen bg-[#f4f6fa] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/20">
       {/* Toast Notification */}
       {toast && (
         <div
@@ -601,10 +610,10 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <main className="flex-1 p-3 lg:p-4 pb-24 md:pb-4 max-w-[1920px] w-full mx-auto">
+      <main className="app-main flex-1 min-w-0 p-3 lg:p-4 pb-24 md:pb-4 max-w-[1920px] w-full mx-auto">
         {/* Terminal navigation: panels stay mounted to preserve chart and debate state. */}
         {activeTab === 'terminal' && (
-          <div className="mb-4 bg-white border border-slate-200 rounded-2xl p-2 sm:p-3 shadow-sm">
+          <div className="terminal-nav mb-4 bg-white border border-slate-200 rounded-2xl p-2 sm:p-3 shadow-sm">
             <div className="flex items-center justify-between gap-2 px-2 pb-2">
               <h1 className="text-base sm:text-lg font-bold text-slate-900">Terminal</h1>
               <span className="text-[10px] font-semibold uppercase tracking-wider text-cyan-700 bg-cyan-50 rounded-full px-2 py-1">Paper trading</span>
@@ -623,8 +632,8 @@ export default function App() {
                 { id: 'history', label: 'History', icon: History },
               ].map(({ id, label, icon: Icon }) => (
                 <button key={id} id={`terminal-tab-${id}`} type="button" role="tab" aria-selected={terminalTab === id} aria-controls={`terminal-panel-${id}`} tabIndex={terminalTab === id ? 0 : -1}
-                  onClick={() => setTerminalTab(id)}
-                  className={`min-w-0 flex items-center justify-center gap-1.5 min-h-[44px] px-1.5 sm:px-3 py-2 rounded-lg text-[11px] sm:text-sm font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-cyan-500 ${terminalTab === id ? 'bg-cyan-600 text-white shadow-sm' : 'text-slate-600 hover:bg-white hover:text-cyan-700'}`}>
+                  onClick={() => openTerminal(id)}
+                  className={`min-w-0 flex items-center justify-center gap-1.5 min-h-[44px] px-1.5 sm:px-3 py-2 rounded-lg text-[11px] sm:text-sm font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-cyan-500 ${terminalTab === id ? 'bg-cyan-600 text-white shadow-sm' : 'text-[#475569] hover:bg-white hover:text-cyan-700'}`}>
                   <Icon size={16} className="shrink-0" /><span>{label}</span>
                   {id === 'trade' && positions.length > 0 && <span className="hidden sm:inline rounded-full bg-white/20 px-1.5 text-[10px]">{positions.length}</span>}
                 </button>
@@ -634,9 +643,9 @@ export default function App() {
         )}
         <section id="terminal-panel-trade" role="tabpanel" aria-labelledby="terminal-tab-trade" hidden={activeTab !== 'terminal' || terminalTab !== 'trade'}>
           <WelcomeGuide marketOpen={feedInfo.marketOpen} onOpenDebate={() => openTerminal('chat')} />
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 h-auto lg:h-[calc(100vh-235px)] lg:min-h-[660px]">
+          <div className="terminal-grid grid grid-cols-1 lg:grid-cols-12 gap-3 h-auto lg:h-[calc(100vh-235px)] lg:min-h-[660px]">
             {/* Left 7 Columns: Complete Option Chain */}
-            <div className="lg:col-span-7 h-[540px] sm:h-[620px] lg:h-full flex flex-col min-h-[420px]">
+            <div className="terminal-chain min-w-0 lg:col-span-7 h-[540px] sm:h-[620px] lg:h-full flex flex-col min-h-[420px]">
               <OptionChain
                 selectedIndex={selectedIndex}
                 onSelectIndex={(idx) => {
@@ -671,9 +680,9 @@ export default function App() {
             </div>
 
             {/* Right 5 Columns: Split Top = Chart, Bottom = Positions / Orders */}
-            <div className="lg:col-span-5 flex flex-col gap-3 h-auto lg:h-full">
+            <div className="terminal-side min-w-0 lg:col-span-5 flex flex-col gap-3 h-auto lg:h-full">
               {/* Top Half: Responsive Candlestick Chart */}
-              <div className="h-[340px] sm:h-[380px] lg:h-[44%] lg:min-h-[260px]">
+              <div className="terminal-chart min-w-0 h-[340px] sm:h-[380px] lg:h-[44%] lg:min-h-[260px]">
                 <TradingChart
                   selectedIndex={selectedIndex}
                   contract={selectedContract}
@@ -686,7 +695,7 @@ export default function App() {
               </div>
 
               {/* Bottom Half: Tabs for Positions & Orders */}
-              <div ref={positionsRef} className="h-[360px] sm:h-[400px] lg:h-auto lg:flex-1 flex flex-col min-h-[260px] overflow-hidden scroll-mt-20">
+              <div ref={positionsRef} className="terminal-positions min-w-0 h-[360px] sm:h-[400px] lg:h-auto lg:flex-1 flex flex-col min-h-[260px] overflow-hidden scroll-mt-20">
                 {/* Panel Switcher Tab Header */}
                 <div className="flex items-center gap-1 mb-1.5 bg-slate-900/60 p-1 rounded-lg border border-slate-800 text-xs w-fit">
                   <button
@@ -759,17 +768,17 @@ export default function App() {
 
         {/* History: trade ledger and the same live-updated debate audit trail. */}
         <section id="terminal-panel-history" role="tabpanel" aria-labelledby="terminal-tab-history" hidden={activeTab !== 'terminal' || terminalTab !== 'history'} className="max-w-7xl mx-auto space-y-3">
-          <div className="bg-white rounded-xl border border-slate-200 p-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="history-toolbar bg-white rounded-xl border border-slate-200 p-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex gap-1 bg-[#eef1f6] rounded-lg p-1">
-              <button aria-pressed={historyView === 'trades'} onClick={() => setHistoryView('trades')} className={`px-3 py-2 rounded-md text-xs font-semibold ${historyView === 'trades' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-600'}`}>Trade History</button>
-              <button aria-pressed={historyView === 'debates'} onClick={() => setHistoryView('debates')} className={`px-3 py-2 rounded-md text-xs font-semibold ${historyView === 'debates' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-600'}`}>Debate History</button>
+              <button aria-pressed={historyView === 'trades'} onClick={() => setHistoryView('trades')} className={`px-3 py-2 rounded-md text-xs font-semibold ${historyView === 'trades' ? 'bg-white text-cyan-700 shadow-sm' : 'text-[#475569]'}`}>Trade History</button>
+              <button aria-pressed={historyView === 'debates'} onClick={() => setHistoryView('debates')} className={`px-3 py-2 rounded-md text-xs font-semibold ${historyView === 'debates' ? 'bg-white text-cyan-700 shadow-sm' : 'text-[#475569]'}`}>Debate History</button>
             </div>
             <div className="flex flex-wrap gap-2">
               <button onClick={() => setShowDailyReportModal(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold"><FileText size={14} /> Daily Report</button>
-              {historyView === 'trades' && <button disabled={!user || exporting} onClick={handleExportHistory} className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-slate-700 text-xs font-semibold disabled:opacity-50"><Download size={14} />{exporting ? 'Exporting...' : 'Export closed trades'}</button>}
+              {historyView === 'trades' && <button disabled={!user || exporting} onClick={handleExportHistory} className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-800 text-ink text-xs font-semibold disabled:opacity-50"><Download size={14} />{exporting ? 'Exporting...' : 'Export closed trades'}</button>}
             </div>
           </div>
-          <div hidden={historyView !== 'trades'} className="h-[650px]">
+          <div hidden={historyView !== 'trades'} className="history-ledger h-[650px]">
             <PositionsPanel key={`history-${user?.id || 'guest'}`} positions={positions} closedPositions={closedPositions} allTrades={allTrades} portfolio={portfolio}
               historyMode onExitPosition={handleExitPosition} onExitAllPositions={handleExitAllPositions} onUpdateStopLoss={handleUpdateStopLoss} onOpenReport={() => setShowDailyReportModal(true)} />
           </div>
@@ -819,7 +828,7 @@ export default function App() {
       {orderModalData && (
         <OrderModal
           orderData={orderModalData}
-          availableCash={portfolio.available_margin || portfolio.capital || 1000000}
+          availableCash={portfolio.available_margin ?? portfolio.cash_balance ?? portfolio.capital ?? 1000000}
           onClose={() => setOrderModalData(null)}
           onSubmitOrder={handlePlaceOrder}
         />
@@ -828,7 +837,7 @@ export default function App() {
       {/* Position Size & Risk Calculator Modal */}
       {showCalculator && (
         <PositionSizeModal
-          availableCapital={portfolio.available_margin || portfolio.capital || 1000000}
+          availableCapital={portfolio.available_margin ?? portfolio.cash_balance ?? portfolio.capital ?? 1000000}
           selectedIndex={selectedIndex}
           onClose={() => setShowCalculator(false)}
           onApplyToOrder={(data) => {

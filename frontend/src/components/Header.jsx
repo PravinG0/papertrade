@@ -41,11 +41,16 @@ export default function Header({
   const [isMuted, setIsMuted] = useState(sound.isMuted());
   const toggleSound = () => setIsMuted(sound.toggleMute());
   const isReplay = replayState?.is_active || false;
-  const initialCapital = portfolio?.initial_capital || 1000000;
-  const capital = portfolio?.capital ?? initialCapital;
-  const realizedPnl = portfolio?.realized_pnl || 0;
-  const unrealizedPnl = portfolio?.unrealized_pnl || 0;
-  const netPnl = realizedPnl + unrealizedPnl;
+  const initialCapital = Number(portfolio?.initial_capital ?? 1000000);
+  const cash = Number(portfolio?.cash_balance ?? portfolio?.available_margin ?? portfolio?.capital ?? initialCapital);
+  const margin = Number(portfolio?.used_margin ?? portfolio?.margin_used ?? 0);
+  const unrealizedPnl = Number(portfolio?.unrealized_pnl ?? 0);
+  const capital = Number(portfolio?.net_liquidation_value ?? (cash + margin + unrealizedPnl));
+  const netPnl = Number(portfolio?.account_net_pnl ?? (capital - initialCapital));
+  const tradePnl = Number(portfolio?.current_cycle_trade_pnl ?? (Number(portfolio?.realized_pnl ?? 0) + unrealizedPnl));
+  const balanceDifference = Number(portfolio?.historical_balance_difference ?? (netPnl - tradePnl));
+  const money = (value) => `₹${Math.abs(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const signedMoney = (value) => `${value < 0 ? '−' : '+'}${money(value)}`;
 
   const renderTicker = (symbol, label, defaultLtp) => {
     const item = indices[symbol] || {
@@ -78,11 +83,11 @@ export default function Header({
   };
 
   return (
-    <header className="bg-[#f4f6fa] border-b border-slate-800 sticky top-0 z-40 select-none">
+    <header className="app-header bg-[#f4f6fa] border-b border-slate-800 sticky top-0 z-40 select-none">
       {/* Top Main Bar */}
-      <div className="px-3 sm:px-4 py-2 sm:py-2.5 flex flex-wrap items-center justify-between gap-2 sm:gap-3">
+      <div className="header-top px-3 sm:px-4 py-2 sm:py-2.5 flex flex-wrap items-center justify-between gap-2 sm:gap-3">
         {/* Brand & Mode */}
-        <div className="flex items-center gap-4">
+        <div className="header-brand flex items-center gap-4">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-600 via-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-cyan-900/30">
               <Sparkles className="w-4 h-4 text-ink" />
@@ -151,7 +156,7 @@ export default function Header({
         </div>
 
         {/* Center Live Indices Ribbon */}
-        <div className="hidden lg:flex items-center gap-2.5">
+        <div className="header-tickers-desktop hidden lg:flex items-center gap-2.5">
           {renderTicker('NIFTY', 'NIFTY 50', 24980)}
           {renderTicker('BANKNIFTY', 'BANK NIFTY', 52140)}
           {renderTicker('FINNIFTY', 'FINNIFTY', 24450)}
@@ -159,15 +164,15 @@ export default function Header({
         </div>
 
         {/* Right Wallet & Actions */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="header-actions flex items-center gap-2 sm:gap-3">
           {/* Virtual Wallet */}
-          <div className="flex items-center gap-2 sm:gap-3 px-2 sm:px-3 py-1 sm:py-1.5 bg-slate-900/90 rounded-xl border border-slate-800 shadow-inner">
+          <div className="header-wallet flex items-center gap-2 sm:gap-3 px-2 sm:px-3 py-1 sm:py-1.5 bg-slate-900/90 rounded-xl border border-slate-800 shadow-inner">
             <div className="flex items-center gap-1.5 text-slate-400 text-xs">
               <Wallet size={13} className="text-cyan-400 shrink-0" />
               <div className="flex flex-col">
-                <span className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 font-semibold">Capital</span>
+                <span className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 font-semibold" title="Cash + used margin + unrealized P&L">Capital / Equity</span>
                 <span className="font-mono font-bold text-ink text-[11px] sm:text-xs num-tabular">
-                  ₹{Number(capital).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                  {capital < 0 ? '−' : ''}{money(capital)}
                 </span>
               </div>
             </div>
@@ -175,15 +180,22 @@ export default function Header({
             <div className="h-5 sm:h-6 w-px bg-slate-800" />
 
             <div className="flex flex-col text-right">
-              <span className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 font-semibold">Net P&L</span>
+              <span className="text-[8px] sm:text-[9px] uppercase tracking-wider text-slate-400 font-semibold" title="Account equity minus starting capital">Account P&L</span>
               <span
                 className={`font-mono font-bold text-[11px] sm:text-xs num-tabular ${
                   netPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'
                 }`}
               >
-                {netPnl >= 0 ? '+' : ''}₹{Number(netPnl).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                {signedMoney(netPnl)}
               </span>
             </div>
+          </div>
+
+          <div className="header-wallet-details flex flex-col text-[10px] leading-tight text-slate-400" title="Available cash is separate from equity; margin is reserved for open trades.">
+            <span>Available cash <b className="text-ink">{cash < 0 ? '−' : ''}{money(cash)}</b></span>
+            <span>Margin used <b className="text-ink">{money(margin)}</b></span>
+            <span>Trade P&amp;L <b className={tradePnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}>{signedMoney(tradePnl)}</b></span>
+            {Math.abs(balanceDifference) >= 0.01 && <span className="text-amber-700 font-semibold" title="Stored wallet and trade ledger differ. This may be due to older resets or accounting discrepancies. No balance has been changed.">Unreconciled balance: {signedMoney(balanceDifference)}</span>}
           </div>
 
           {/* AI Daily Trading Report Button */}
@@ -322,7 +334,7 @@ export default function Header({
       </div>
 
       {/* Mobile Live Indices Ribbon (< lg screens) */}
-      <div className="flex lg:hidden items-center gap-2 px-3 py-1 bg-[#eef1f6] border-t border-slate-800/60 overflow-x-auto scrollbar-none text-xs">
+      <div className="header-tickers-mobile flex lg:hidden items-center gap-2 px-3 py-1 bg-[#eef1f6] border-t border-slate-800/60 overflow-x-auto scrollbar-none text-xs">
         {renderTicker('NIFTY', 'NIFTY 50', 24980)}
         {renderTicker('BANKNIFTY', 'BANK NIFTY', 52140)}
         {renderTicker('FINNIFTY', 'FINNIFTY', 24450)}
@@ -330,7 +342,7 @@ export default function Header({
       </div>
 
       {/* Sub-bar: Navigation Tabs & Mobile Ticker */}
-      <div className="px-3 sm:px-4 py-1.5 bg-slate-950/90 border-t border-slate-800/80 flex items-center justify-between gap-2 overflow-x-auto scrollbar-none">
+      <div className="header-nav px-3 sm:px-4 py-1.5 bg-slate-950/90 border-t border-slate-800/80 flex items-center justify-between gap-2 overflow-x-auto scrollbar-none">
         <div className="hidden md:flex items-center gap-1 text-xs shrink-0">
           <button
             onClick={() => setActiveTab('terminal')}

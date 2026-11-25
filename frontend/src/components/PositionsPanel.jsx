@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { dateTimeIST, dateInRange, todayIST } from '../utils/tradeDates';
 import {
   Activity,
   ArrowUpRight,
@@ -34,7 +35,9 @@ export default function PositionsPanel({
 }) {
   const [activeFilter, setActiveFilter] = useState('ALL'); // 'ALL' | 'OPEN' | 'TARGET_HIT' | 'STOP_LOSS_HIT' | 'CLOSED'
   const [searchQuery, setSearchQuery] = useState('');
-  const [dateFilter, setDateFilter] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [dateField, setDateField] = useState('entry');
   const [indexFilter, setIndexFilter] = useState('');
   const [editingSl, setEditingSl] = useState({});
   const [savingSl, setSavingSl] = useState({});
@@ -130,7 +133,7 @@ export default function PositionsPanel({
       }
     });
 
-    return list;
+    return list.sort((a, b) => String(b.entry_time).localeCompare(String(a.entry_time)));
   }, [positions, closedPositions, allTrades, openOnly]);
 
   // Counts for tabs
@@ -147,7 +150,7 @@ export default function PositionsPanel({
   // Filtered trades by tab and search
   const filteredTrades = useMemo(() => {
     return unifiedTrades.filter((t) => {
-      if (dateFilter && String(t.entry_time || t.created_at || "").slice(0, 10) !== dateFilter) return false;
+      if (!dateInRange(dateField === 'exit' ? t.exit_time : t.entry_time, fromDate, toDate)) return false;
       if (indexFilter && (t.underlying || "").toUpperCase() !== indexFilter) return false;
       // Tab filter
       if (activeFilter === 'OPEN' && t.trade_status !== 'OPEN') return false;
@@ -167,11 +170,11 @@ export default function PositionsPanel({
 
       return true;
     });
-  }, [unifiedTrades, activeFilter, searchQuery, dateFilter, indexFilter]);
+  }, [unifiedTrades, activeFilter, searchQuery, fromDate, toDate, dateField, indexFilter]);
 
   const unrealizedPnl = portfolio?.unrealized_pnl ?? positions.reduce((acc, p) => acc + (p.pnl || p.unrealized_pnl || 0), 0);
-  const realizedPnl = portfolio?.realized_pnl ?? closedPositions.reduce((acc, p) => acc + (p.realized_pnl || 0), 0);
-  const marginUsed = portfolio?.margin_used ?? positions.reduce((acc, p) => acc + (p.invested_amount || p.margin || (p.entry_price * (p.quantity || 25)) || 0), 0);
+  const realizedPnl = historyMode ? filteredTrades.filter(t => !t.is_open).reduce((acc, t) => acc + Number(t.realized_pnl ?? 0), 0) : (portfolio?.realized_pnl ?? closedPositions.reduce((acc, p) => acc + (p.realized_pnl || 0), 0));
+  const marginUsed = portfolio?.used_margin ?? portfolio?.margin_used ?? positions.reduce((acc, p) => acc + (p.invested_amount || p.margin || (p.entry_price * (p.quantity || 25)) || 0), 0);
 
   const handleSaveSl = async (id) => {
     const newSl = editingSl[id];
@@ -245,15 +248,15 @@ export default function PositionsPanel({
   };
 
   return (
-    <div className="bg-[#ffffff] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full select-none">
+    <div className="trade-ledger bg-[#ffffff] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full select-none">
       {/* Header Bar */}
       <div className="p-2.5 bg-[#f4f6fa] border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Activity size={16} className="text-cyan-500" />
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-ink flex items-center gap-1.5">
             <span>{openOnly ? 'Open Positions' : historyMode ? 'Executed Trade History' : 'Terminal Positions & Executed Trades'}</span>
             <span className="px-1.5 py-0.2 rounded bg-cyan-100 text-cyan-800 text-[10px] font-mono">
-              {unifiedTrades.length}
+              {historyMode ? `${filteredTrades.length}/${unifiedTrades.length}` : unifiedTrades.length}
             </span>
           </h3>
         </div>
@@ -285,9 +288,9 @@ export default function PositionsPanel({
       </div>
 
       {/* Filter Tabs & Quick Search Ribbon */}
-      <div className="px-3 py-1.5 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+      <div className="trade-filters px-3 py-1.5 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
         {/* Status Filter Buttons */}
-        {!openOnly && <div className="flex items-center gap-1 overflow-x-auto scrollbar-none">
+        {!openOnly && <div className="trade-status-filters flex items-center gap-1 overflow-x-auto scrollbar-none">
           <button
             onClick={() => setActiveFilter('ALL')}
             className={`px-2.5 py-1 rounded-md font-medium text-[11px] flex items-center gap-1 transition-all ${
@@ -362,14 +365,18 @@ export default function PositionsPanel({
             </span>
           </button>
         </div>}
-        {historyMode && <div className="flex flex-wrap gap-2 items-center">
-          <label className="text-[11px] text-slate-300 flex items-center gap-1">Entry date <input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className="bg-slate-800 border border-slate-700 text-slate-200 rounded px-1 py-0.5" /></label>
-          <label className="text-[11px] text-slate-300 flex items-center gap-1">Index <select value={indexFilter} onChange={(e) => setIndexFilter(e.target.value)} className="bg-slate-800 border border-slate-700 text-slate-200 rounded px-1 py-0.5"><option value="">All</option>{[...new Set(unifiedTrades.map((t) => t.underlying).filter(Boolean))].sort().map((idx) => <option key={idx}>{idx}</option>)}</select></label>
-          {(dateFilter || indexFilter) && <button onClick={() => { setDateFilter(''); setIndexFilter(''); }} className="text-cyan-400 text-xs">Clear filters</button>}
+        {historyMode && <div className="trade-date-filters flex flex-wrap gap-2 items-center">
+          <label className="text-[11px] text-slate-300 flex items-center gap-1">Date by <select value={dateField} onChange={e => setDateField(e.target.value)} className="bg-white border border-slate-700 text-ink rounded px-1 py-0.5"><option value="entry">Entry</option><option value="exit">Exit</option></select></label>
+          <label className="text-[11px] text-slate-300 flex items-center gap-1">From <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="bg-white border border-slate-700 text-ink rounded px-1 py-0.5" /></label>
+          <label className="text-[11px] text-slate-300 flex items-center gap-1">To <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="bg-white border border-slate-700 text-ink rounded px-1 py-0.5" /></label>
+          <button onClick={() => { const today = todayIST(); setFromDate(today); setToDate(today); }} className="text-cyan-700 font-semibold text-xs">Today</button>
+          <label className="text-[11px] text-slate-300 flex items-center gap-1">Index <select value={indexFilter} onChange={(e) => setIndexFilter(e.target.value)} className="bg-white border border-slate-700 text-ink rounded px-1 py-0.5"><option value="">All</option>{[...new Set(unifiedTrades.map((t) => t.underlying).filter(Boolean))].sort().map((idx) => <option key={idx}>{idx}</option>)}</select></label>
+          <button onClick={() => { setFromDate(''); setToDate(''); setDateField('entry'); setIndexFilter(''); setSearchQuery(''); setActiveFilter('ALL'); }} className="text-cyan-700 font-semibold text-xs">Clear filters</button>
+          {fromDate && toDate && fromDate > toDate && <span role="alert" className="text-rose-600 text-xs">From date must be on or before To date.</span>}
         </div>}
 
         {/* Quick Search Box */}
-        <div className="relative flex items-center">
+        <div className="trade-search relative flex items-center">
           <Search size={12} className="absolute left-2 text-slate-500 pointer-events-none" />
           <input
             type="text"
@@ -382,27 +389,27 @@ export default function PositionsPanel({
       </div>
 
       {/* Main Executed Trades Table */}
-      <div className="flex-1 overflow-x-auto overflow-y-auto min-h-[220px]">
-        <table className="w-full min-w-[760px] border-collapse text-xs">
-          <thead>
-            <tr className="bg-slate-950 text-[10px] uppercase font-mono text-slate-400 border-b border-slate-800 sticky top-0 z-10">
-              <th className="py-2.5 px-3 text-left">Trade Status</th>
-              <th className="py-2.5 px-3 text-left">Instrument</th>
-              <th className="py-2.5 px-2 text-center">Side / Qty</th>
-              <th className="py-2.5 px-2 text-right">Entry (₹)</th>
-              <th className="py-2.5 px-2 text-right">Exit / LTP (₹)</th>
-              <th className="py-2.5 px-2 text-center">Stop-Loss (₹)</th>
-              <th className="py-2.5 px-2 text-center">Target (₹)</th>
-              <th className="py-2.5 px-3 text-right">P&amp;L (₹)</th>
-              <th className="py-2.5 px-2 text-left">Execution Time (IST)</th>
-              <th className="py-2.5 px-3 text-center">Action / Reason</th>
+      <div className="trade-scroll flex-1 overflow-x-auto overflow-y-auto min-h-[220px]">
+        <table role="table" className="trade-table w-full min-w-[760px] border-collapse text-xs">
+          <thead role="rowgroup">
+            <tr role="row" className="bg-slate-950 text-[10px] uppercase font-mono text-slate-400 border-b border-slate-800 sticky top-0 z-10">
+              <th role="columnheader" className="py-2.5 px-3 text-left">Trade Status</th>
+              <th role="columnheader" className="py-2.5 px-3 text-left">Instrument</th>
+              <th role="columnheader" className="py-2.5 px-2 text-center">Side / Qty</th>
+              <th role="columnheader" className="py-2.5 px-2 text-right">Entry (₹)</th>
+              <th role="columnheader" className="py-2.5 px-2 text-right">Exit / LTP (₹)</th>
+              <th role="columnheader" className="py-2.5 px-2 text-center">Stop-Loss (₹)</th>
+              <th role="columnheader" className="py-2.5 px-2 text-center">Target (₹)</th>
+              <th role="columnheader" className="py-2.5 px-3 text-right">P&amp;L (₹)</th>
+              <th role="columnheader" className="py-2.5 px-2 text-left">Entry / Exit Date &amp; Time (IST)</th>
+              <th role="columnheader" className="py-2.5 px-3 text-center">Action / Reason</th>
             </tr>
           </thead>
 
-          <tbody className="divide-y divide-slate-800/60 font-mono text-[11px]">
+          <tbody role="rowgroup" className="divide-y divide-slate-800/60 font-mono text-[11px]">
             {filteredTrades.length === 0 ? (
-              <tr>
-                <td colSpan="10" className="py-12 text-center text-slate-500 font-sans">
+              <tr role="row" className="trade-empty">
+                <td role="cell" colSpan="10" className="py-12 text-center text-slate-500 font-sans">
                   <Activity size={24} className="mx-auto mb-2 text-slate-600" />
                   <p className="font-semibold text-slate-300">No trades matching filter</p>
                   <p className="text-xs text-slate-500 mt-1">
@@ -429,7 +436,7 @@ export default function PositionsPanel({
 
                 return (
                   <tr
-                    key={id}
+                    key={id} role="row"
                     className={`transition-colors ${
                       isOpen
                         ? 'bg-slate-900/60 hover:bg-slate-800/60'
@@ -441,13 +448,13 @@ export default function PositionsPanel({
                     }`}
                   >
                     {/* 1. Trade Status Badge */}
-                    <td className="py-2.5 px-3 text-left whitespace-nowrap">
+                    <td role="cell" data-label="Status" className="py-2.5 px-3 text-left whitespace-nowrap">
                       {renderStatusBadge(trade.trade_status)}
                     </td>
 
                     {/* 2. Instrument & Type */}
-                    <td className="py-2.5 px-3 text-left">
-                      <div className="flex items-center gap-1.5 font-bold text-slate-900 font-sans">
+                    <td role="cell" data-label="Instrument" className="py-2.5 px-3 text-left">
+                      <div className="flex items-center gap-1.5 font-bold text-ink font-sans">
                         <span>{trade.symbol || `${trade.underlying || 'NIFTY'} ${trade.strike} ${optType}`}</span>
                         <span
                           className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
@@ -465,7 +472,7 @@ export default function PositionsPanel({
                     </td>
 
                     {/* 3. Side & Qty */}
-                    <td className="py-2.5 px-2 text-center">
+                    <td role="cell" data-label="Side / Qty" className="py-2.5 px-2 text-center">
                       <span
                         className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
                           isBuy
@@ -481,22 +488,22 @@ export default function PositionsPanel({
                     </td>
 
                     {/* 4. Entry Price */}
-                    <td className="py-2.5 px-2 text-right text-slate-300 num-tabular">
+                    <td role="cell" data-label="Entry (₹)" className="py-2.5 px-2 text-right text-slate-300 num-tabular">
                       ₹{Number(trade.entry_price || 0).toFixed(2)}
                     </td>
 
                     {/* 5. Exit / LTP Price */}
-                    <td className="py-2.5 px-2 text-right num-tabular">
+                    <td role="cell" data-label="Exit / LTP (₹)" className="py-2.5 px-2 text-right num-tabular">
                       {isOpen ? (
                         <div>
-                          <span className="font-bold text-slate-900">
+                          <span className="font-bold text-ink">
                             ₹{Number(trade.current_ltp || trade.live_price || trade.entry_price).toFixed(2)}
                           </span>
                           <div className="text-[9px] text-cyan-600 font-sans uppercase">Live LTP</div>
                         </div>
                       ) : (
                         <div>
-                          <span className="font-bold text-slate-900">
+                          <span className="font-bold text-ink">
                             ₹{Number(trade.exit_price ?? trade.current_ltp ?? trade.entry_price).toFixed(2)}
                           </span>
                           <div className="text-[9px] text-slate-500 font-sans uppercase">Exit Price</div>
@@ -505,7 +512,7 @@ export default function PositionsPanel({
                     </td>
 
                     {/* 6. Stop-Loss Price (Editable if open) */}
-                    <td className="py-2.5 px-2 text-center">
+                    <td role="cell" data-label="Stop-loss (₹)" className="py-2.5 px-2 text-center">
                       {isOpen ? (
                         <div className="flex items-center justify-center gap-1 font-sans">
                           <input
@@ -537,7 +544,7 @@ export default function PositionsPanel({
                     </td>
 
                     {/* 7. Target Price */}
-                    <td className="py-2.5 px-2 text-center text-slate-300 font-mono">
+                    <td role="cell" data-label="Target (₹)" className="py-2.5 px-2 text-center text-slate-300 font-mono">
                       {trade.target ? (
                         <span className="text-emerald-400 font-bold">₹{Number(trade.target).toFixed(2)}</span>
                       ) : (
@@ -546,7 +553,7 @@ export default function PositionsPanel({
                     </td>
 
                     {/* 8. P&L (Unrealized or Realized) */}
-                    <td className="py-2.5 px-3 text-right num-tabular whitespace-nowrap">
+                    <td role="cell" data-label="P&L (₹)" className="py-2.5 px-3 text-right num-tabular whitespace-nowrap">
                       <div className={`font-bold ${isProfit ? 'text-emerald-600' : 'text-rose-600'}`}>
                         {isProfit ? '+' : ''}₹{Number(pnl).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
@@ -558,20 +565,20 @@ export default function PositionsPanel({
                     </td>
 
                     {/* 9. Execution Time */}
-                    <td className="py-2.5 px-2 text-left font-sans whitespace-nowrap">
+                    <td role="cell" data-label="Date & time (IST)" className="py-2.5 px-2 text-left font-sans whitespace-nowrap">
                       <div className="flex items-center gap-1 text-[11px] text-slate-300">
                         <Clock size={11} className="text-slate-500 shrink-0" />
-                        <span>Entry: {trade.execution_time?.replace('T', ' ').slice(11, 19) || '—'}</span>
+                        <span>Entry: {dateTimeIST(trade.execution_time)}</span>
                       </div>
                       {!isOpen && trade.exit_time && (
                         <div className="text-[10px] text-slate-500">
-                          Exit: {trade.exit_time?.replace('T', ' ').slice(11, 19)}
+                          Exit: {dateTimeIST(trade.exit_time)}
                         </div>
                       )}
                     </td>
 
                     {/* 10. Action / Exit Reason */}
-                    <td className="py-2.5 px-3 text-center font-sans">
+                    <td role="cell" data-label="Action / Reason" className="py-2.5 px-3 text-center font-sans">
                       {isOpen ? (
                         <button
                           onClick={() => handleExit(id)}
@@ -609,7 +616,7 @@ export default function PositionsPanel({
         <div className="flex flex-wrap items-center gap-4 font-mono">
           <div>
             <span className="text-slate-500 font-sans uppercase text-[10px] mr-1">Open Margin Used:</span>
-            <span className="font-bold text-slate-900 num-tabular">
+            <span className="font-bold text-ink num-tabular">
               ₹{Number(marginUsed).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </div>
@@ -626,7 +633,7 @@ export default function PositionsPanel({
           </div>
 
           <div>
-            <span className="text-slate-500 font-sans uppercase text-[10px] mr-1">Realized Net P&amp;L:</span>
+            <span className="text-slate-500 font-sans uppercase text-[10px] mr-1">{historyMode ? 'Filtered realized P&L:' : 'Realized Net P&L:'}</span>
             <span
               className={`font-bold num-tabular ${
                 realizedPnl >= 0 ? 'text-emerald-600' : 'text-rose-600'

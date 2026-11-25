@@ -138,14 +138,14 @@ export default function ReplayControls({
   return (
     <div className="bg-[#ffffff]/95 backdrop-blur-md border border-amber-500/50 rounded-xl p-3 shadow-2xl flex flex-wrap items-center justify-between gap-3 text-xs select-none">
       {/* Date Selector & Mode Label */}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-950/80 border border-amber-600/50 text-amber-300 font-bold uppercase tracking-wider text-[11px]">
           <Calendar size={13} />
           <span>Historical Replay</span>
         </div>
 
         {!isActive ? (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <select
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
@@ -200,7 +200,7 @@ export default function ReplayControls({
 
       {/* Action Controls & Speeds */}
       {isActive && (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Play / Pause */}
           <button
             onClick={handleTogglePlay}

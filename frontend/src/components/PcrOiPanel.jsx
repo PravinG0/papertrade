@@ -292,11 +292,11 @@ export default function PcrOiPanel({
               return (
                 <div key={s.strike} className="flex items-center gap-2 text-xs font-mono">
                   {/* Left: Call OI Bar (aligned right towards strike) */}
-                  <div className="flex-1 flex items-center justify-end gap-1.5">
+                  <div className="min-w-0 flex-1 flex items-center justify-end gap-1.5">
                     <span className="text-[10px] text-slate-400 num-tabular">
                       {(s.ceOi / 1000).toFixed(0)}k
                     </span>
-                    <div className="w-32 sm:w-48 bg-slate-800 rounded-sm h-3.5 flex justify-end overflow-hidden">
+                    <div className="min-w-0 flex-1 max-w-[12rem] bg-slate-800 rounded-sm h-3.5 flex justify-end overflow-hidden">
                       <div
                         className="bg-rose-500 h-full rounded-sm transition-all duration-300"
                         style={{ width: `${cePct}%` }}
@@ -316,8 +316,8 @@ export default function PcrOiPanel({
                   </div>
 
                   {/* Right: Put OI Bar (aligned left away from strike) */}
-                  <div className="flex-1 flex items-center justify-start gap-1.5">
-                    <div className="w-32 sm:w-48 bg-slate-800 rounded-sm h-3.5 flex justify-start overflow-hidden">
+                  <div className="min-w-0 flex-1 flex items-center justify-start gap-1.5">
+                    <div className="min-w-0 flex-1 max-w-[12rem] bg-slate-800 rounded-sm h-3.5 flex justify-start overflow-hidden">
                       <div
                         className="bg-emerald-500 h-full rounded-sm transition-all duration-300"
                         style={{ width: `${pePct}%` }}

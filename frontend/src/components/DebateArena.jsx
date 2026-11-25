@@ -121,7 +121,7 @@ function MarketMatrixBar({ snapshot }) {
 
   return (
     <div className="bg-[#f4f6fa]/90 border border-slate-800/90 rounded-xl p-3 text-xs overflow-x-auto">
-      <div className="flex items-center justify-between gap-4 min-w-[760px]">
+      <div className="debate-metrics flex items-center justify-between gap-4 min-w-[760px]">
         <div className="flex items-center gap-1.5">
           <span className="text-slate-400 uppercase text-[10px] font-semibold">Spot</span>
           <span className="font-mono font-bold text-ink text-xs">₹{snapshot.spot_price?.toFixed(2)}</span>
@@ -553,7 +553,7 @@ export default function DebateArena({
   const isNoTrade = !isBuyCE && !isBuyPE;
 
   return (
-    <div className="space-y-4 max-w-7xl mx-auto pb-12">
+    <div className="debate-arena space-y-4 max-w-7xl mx-auto pb-12">
       {/* ── AUTO-DEBATE SCHEDULER CONTROL BAR ── */}
       <div className="bg-[#ffffff]/90 backdrop-blur-md border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-xl">
         <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 sm:gap-4">

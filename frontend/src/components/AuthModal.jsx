@@ -151,7 +151,7 @@ export default function AuthModal({ isOpen, onClose, initialTab = 'login', onAut
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
       <div
-        className="relative w-full max-w-md max-h-[92vh] flex flex-col bg-[#ffffff] border border-slate-800 rounded-2xl shadow-2xl shadow-black/80 overflow-hidden"
+        className="mobile-dialog relative w-full max-w-md max-h-[92vh] flex flex-col bg-[#ffffff] border border-slate-800 rounded-2xl shadow-2xl shadow-black/80 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Glow Header Accent */}

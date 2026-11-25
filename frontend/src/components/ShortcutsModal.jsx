@@ -14,7 +14,7 @@ export default function ShortcutsModal({ onClose = () => {} }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-fade-in select-none">
-      <div className="bg-[#ffffff] border border-slate-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col font-sans">
+      <div className="mobile-dialog bg-[#ffffff] border border-slate-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col font-sans">
         {/* Header */}
         <div className="p-4 bg-[#f4f6fa] border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2">

@@ -325,7 +325,7 @@ function ChartPane({
   return (
     <div className="flex flex-col h-full bg-[#f4f6fa] border border-slate-800 rounded-lg overflow-hidden">
       {/* Pane Top Bar */}
-      <div className="p-2 bg-[#ffffff] border-b border-slate-800 flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
+      <div className="chart-pane-controls p-2 bg-[#ffffff] border-b border-slate-800 flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
         <div className="flex items-center gap-1.5">
           <span
             className={`px-2 py-0.5 rounded font-mono font-bold text-[11px] ${
@@ -479,7 +479,7 @@ export default function TradingChart({
   return (
     <div className="bg-[#ffffff] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full">
       {/* Chart Global Header Controls */}
-      <div className="px-3 py-2 bg-[#f4f6fa] border-b border-slate-800 flex items-center justify-between gap-2 text-xs">
+      <div className="chart-controls px-3 py-2 bg-[#f4f6fa] border-b border-slate-800 flex items-center justify-between gap-2 text-xs">
         {/* Left: Index Selector */}
         <div className="flex items-center gap-2">
           <div className="flex items-center bg-slate-900 p-0.5 rounded-lg border border-slate-800">
@@ -556,7 +556,7 @@ export default function TradingChart({
           aria-label="Compare index and ATM option charts"
           onClick={(e) => e.target === e.currentTarget && setDualSplit(false)}
         >
-          <div className="bg-white w-full h-[94vh] sm:h-[88vh] sm:max-w-6xl rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+          <div className="mobile-dialog chart-compare bg-white w-full h-[94vh] sm:h-[88vh] sm:max-w-6xl rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
             <div className="px-3 sm:px-4 py-2.5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
                 <h3 className="text-sm font-bold text-ink">Compare charts</h3>

@@ -11,7 +11,6 @@ Provides:
 
 from __future__ import annotations
 
-import contextlib
 
 import asyncio
 import logging
@@ -26,7 +25,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import INDEX_CONFIG, get_index_spec, normalize_index_symbol, settings
-from database import PaperTradeModel, PortfolioModel, PendingOrderModel, async_session_factory
+from database import PaperTradeModel, PortfolioModel, PendingOrderModel, AppKVModel, async_session_factory
+from wallet_accounting import wallet_accounting
 
 logger = logging.getLogger("paper_engine")
 IST = ZoneInfo("Asia/Kolkata")
@@ -192,15 +192,16 @@ class PaperEngine:
     async def get_state(self, user_id: Optional[int] = None) -> dict[str, Any]:
         """Return full snapshot of the trading account for specified user or guest.
 
-        Read-only: deliberately NOT holding the engine lock while it waits on the database, so
-        slow DB reads (polled every few seconds by the UI) can never starve order placement.
+        Hold the engine lock for a consistent wallet, open positions and history snapshot.
         """
-        async with contextlib.nullcontext():
+        async with self._lock:
             async with async_session_factory() as session:
                 port = await self._get_or_create_portfolio(session, user_id)
                 cash_balance = port.cash_balance
                 used_margin = port.margin_used
                 initial_capital = port.initial_capital
+                baseline_record = await session.get(AppKVModel, f"wallet-reset-baseline:{port.id}")
+                reset_baseline = float(baseline_record.value) if baseline_record else 0.0
 
             # Filter active positions and orders for user
             user_positions = []
@@ -241,7 +242,7 @@ class PaperEngine:
             )
             today_pnl = round(today_realized + unrealized_pnl, 2)
 
-            net_liquidation_value = round(cash_balance + used_margin + unrealized_pnl, 2)
+            accounting = wallet_accounting(initial_capital, cash_balance, used_margin, realized_pnl, unrealized_pnl, reset_baseline)
             total_trades = len(closed_trades)
             profit_trades = [t for t in closed_trades if t.get("realized_pnl", 0.0) > 0]
             loss_trades = [t for t in closed_trades if t.get("realized_pnl", 0.0) < 0]
@@ -266,7 +267,7 @@ class PaperEngine:
                 "cash_balance": round(cash_balance, 2),
                 "available_margin": round(cash_balance, 2),
                 "used_margin": round(used_margin, 2),
-                "net_liquidation_value": net_liquidation_value,
+                **accounting,
                 "realized_pnl": round(realized_pnl, 2),
                 "gross_realized_pnl": round(gross_realized_pnl, 2),
                 "total_charges": round(total_charges, 2),
@@ -812,6 +813,15 @@ class PaperEngine:
                     t.current_ltp = t.entry_price
                     t.gross_pnl = t.realized_pnl = t.pnl = t.total_charges = t.pnl_pct = 0.0
                     t.closed_at = self._now_ist()
+                # Keep the historic ledger but exclude pre-reset realized P&L from the new cycle.
+                from sqlalchemy import func
+                baseline = (await session.execute(select(func.coalesce(func.sum(PaperTradeModel.realized_pnl), 0.0)).where(owner, PaperTradeModel.status == "CLOSED"))).scalar_one()
+                key = f"wallet-reset-baseline:{port.id}"
+                record = await session.get(AppKVModel, key)
+                if record is None:
+                    session.add(AppKVModel(key=key, value=str(float(baseline))))
+                else:
+                    record.value = str(float(baseline))
                 await session.commit()
 
             for pid in pids_to_remove:

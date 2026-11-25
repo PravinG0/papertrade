@@ -12,7 +12,7 @@ const ITEMS = [
 export default function BottomNav({ activeTab, setActiveTab, positionsCount = 0 }) {
   return (
     <nav
-      className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur border-t border-slate-200 shadow-[0_-4px_16px_-8px_rgba(15,23,42,0.25)]"
+      className="mobile-bottom-nav md:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur border-t border-slate-200 shadow-[0_-4px_16px_-8px_rgba(15,23,42,0.25)]"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       aria-label="Main navigation"
     >
@@ -20,7 +20,7 @@ export default function BottomNav({ activeTab, setActiveTab, positionsCount = 0 
         {ITEMS.map(({ id, label, icon: Icon }) => {
           const active = activeTab === id;
           return (
-            <li key={id}>
+            <li key={id} className="relative">
               <button
                 onClick={() => {
                   setActiveTab(id);

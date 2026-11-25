@@ -488,7 +488,7 @@ export default function PnlHeatmap() {
               No executed trades recorded yet. Place orders on the Option Chain or Terminal to populate your journal.
             </div>
           ) : (
-            <table className="w-full text-left text-xs font-mono">
+            <table className="w-full min-w-[700px] text-left text-xs font-mono">
               <thead className="bg-slate-900/90 text-slate-400 uppercase text-[10px] sticky top-0 border-b border-slate-800 select-none">
                 <tr>
                   <th className="py-2.5 px-3">Contract</th>

@@ -98,7 +98,7 @@ export default function OrderModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/50 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-white border border-slate-700 w-full sm:max-w-md max-h-[92vh] flex flex-col rounded-t-2xl sm:rounded-2xl overflow-hidden shadow-2xl">
+      <div className="mobile-dialog bg-white border border-slate-700 w-full sm:max-w-md max-h-[92vh] flex flex-col rounded-t-2xl sm:rounded-2xl overflow-hidden shadow-2xl">
         {/* Top Header */}
         <div
           className={`p-4 flex items-center justify-between border-b ${

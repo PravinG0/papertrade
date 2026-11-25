@@ -62,7 +62,7 @@ export default function QuickScalperBar({
         </div>
 
         {/* SL & Target Presets */}
-        <div className="flex items-center gap-2 text-[10px]">
+        <div className="flex flex-wrap items-center gap-2 text-[10px]">
           <div className="flex items-center gap-1 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
             <Shield size={10} className="text-rose-400" />
             <span className="text-slate-400">SL:</span>
@@ -102,7 +102,7 @@ export default function QuickScalperBar({
       </div>
 
       {/* Scalp Triggers (ATM Call on Left, ATM Put on Right) */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {/* ATM CALL SCALPER */}
         <div className="bg-emerald-950/20 border border-emerald-900/40 rounded-lg p-2 flex items-center justify-between gap-2">
           <div className="flex flex-col">
@@ -121,7 +121,7 @@ export default function QuickScalperBar({
                 key={lots}
                 onClick={() => handleQuickScalp('CE', lots, `CE_${lots}`)}
                 disabled={loadingAction !== null}
-                className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-mono font-bold text-[10px] shadow transition-all disabled:opacity-50"
+                className="min-h-[40px] sm:min-h-0 px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-mono font-bold text-[10px] shadow transition-all disabled:opacity-50"
                 title={`Buy ${lots} Lot (${lots * lotSize} Qty) of ${atmStrike} CE with SL ${slPoints}pts`}
               >
                 {loadingAction === `CE_${lots}` ? '...' : `+${lots}L`}
@@ -148,7 +148,7 @@ export default function QuickScalperBar({
                 key={lots}
                 onClick={() => handleQuickScalp('PE', lots, `PE_${lots}`)}
                 disabled={loadingAction !== null}
-                className="px-2 py-1 rounded bg-rose-600 hover:bg-rose-500 active:scale-95 text-white font-mono font-bold text-[10px] shadow transition-all disabled:opacity-50"
+                className="min-h-[40px] sm:min-h-0 px-2 py-1 rounded bg-rose-600 hover:bg-rose-500 active:scale-95 text-white font-mono font-bold text-[10px] shadow transition-all disabled:opacity-50"
                 title={`Buy ${lots} Lot (${lots * lotSize} Qty) of ${atmStrike} PE with SL ${slPoints}pts`}
               >
                 {loadingAction === `PE_${lots}` ? '...' : `+${lots}L`}

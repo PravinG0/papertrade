@@ -224,7 +224,7 @@ export default function OptionChain({
   return (
     <div className="bg-[#ffffff] border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col h-full">
       {/* Controls Bar */}
-      <div className="p-3 bg-[#f4f6fa] border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
+      <div className="chain-controls p-3 bg-[#f4f6fa] border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
         {/* Left: Index selector & Expiry & Strikes count */}
         <div className="flex flex-wrap items-center gap-2">
           {/* Index Selector */}
@@ -394,7 +394,7 @@ export default function OptionChain({
       </div>
 
       {/* Main Table */}
-      <div className="flex-1 overflow-x-auto overflow-y-auto">
+      <div className="chain-scroll flex-1 overflow-x-auto overflow-y-auto">
         <table data-advanced={advanced ? 'true' : 'false'} className="w-full border-collapse text-xs select-none">
           <thead className="sticky top-0 z-20 bg-[#f4f6fa] border-b border-slate-800 shadow-sm">
             {/* Top Super-headers */}
