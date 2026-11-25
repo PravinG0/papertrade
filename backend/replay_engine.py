@@ -66,7 +66,7 @@ class ReplayEngine:
             d -= timedelta(days=1)
         return dates
 
-    async def start_replay(self, date_str: str, symbol: str = "NIFTY") -> dict[str, Any]:
+    async def start_replay(self, date_str: str, symbol: str = "NIFTY", owner_id: Optional[int] = None) -> dict[str, Any]:
         """Initiate historical replay for a specific trading session."""
         from angel_service import angel_service
 
@@ -87,6 +87,7 @@ class ReplayEngine:
             self.candle_index = 0
             self.date = date_str
             self.symbol = sym_norm
+            self.owner_id = owner_id
             self.is_replaying = True
             self.is_paused = False
             self.speed = 1.0
@@ -158,13 +159,17 @@ class ReplayEngine:
             quotes_dict[f"{self.symbol}{k}PE"] = pe_p
 
         # Update paper trading engine
-        await paper_engine.update_market_prices(quotes_dict)
+        if self.owner_id is not None:
+            await paper_engine.update_market_prices(quotes_dict, replay=True, replay_owner=self.owner_id)
 
         # Check automated 3:15 PM intraday square-off
         candle_time = candle.get("time")
         if candle_time:
             time_str = datetime.fromtimestamp(candle_time, tz=IST).strftime("%H:%M:%S")
-            if time_str >= "15:15:00":
+            if time_str >= "15:15:00" and self.owner_id is not None:
+                for oid, order in list(paper_engine.active_orders.items()):
+                    if order.get("user_id") == self.owner_id:
+                        await paper_engine.cancel_order(oid, user_id=self.owner_id)
                 # The replay clock may only square off the replaying user's own trades
                 await paper_engine.check_intraday_squareoff(time_str, only_user=self.owner_id)
 
@@ -218,6 +223,7 @@ class ReplayEngine:
 
     async def _stop_internal(self) -> None:
         """Internal teardown of replay task."""
+        owner = self.owner_id
         self.is_replaying = False
         self.is_paused = False
         self.owner_id = None
@@ -228,6 +234,11 @@ class ReplayEngine:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        if owner is not None:
+            for oid, order in list(paper_engine.active_orders.items()):
+                if order.get("user_id") == owner:
+                    await paper_engine.cancel_order(oid, user_id=owner)
+            await paper_engine.exit_all_positions(reason="REPLAY_STOPPED", user_id=owner)
         self.candles.clear()
         self.candle_index = 0
         self.total_candles = 0

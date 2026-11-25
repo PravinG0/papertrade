@@ -172,6 +172,7 @@ class DebateEngine:
         self.judge_agent = JudgeAgent()
         self._history: list[DebateSession] = []
         self._lock = asyncio.Lock()
+        self._execution_lock = asyncio.Lock()
 
     @classmethod
     def get_instance(cls) -> DebateEngine:
@@ -279,9 +280,14 @@ class DebateEngine:
         step = spec.get("strike_step", 50)
 
         # 1. Spot price
-        spot = await angel_service.get_spot_price(sym)
-        if not spot or spot <= 0:
-            spot = float(spec.get("default_spot", 24980.0))
+        spots = await angel_service.get_spot_indices()
+        selected = next((s for s in spots if s.get("symbol") == sym), {})
+        require_live = angel_service.is_configured() or not settings.ALLOW_SIMULATED_TRADING
+        if require_live and selected.get("source") != "live":
+            raise ValueError(f"Live spot price unavailable for {sym}; debate skipped.")
+        spot = float(selected.get("ltp") or 0)
+        if spot <= 0:
+            raise ValueError(f"Invalid spot price for {sym}.")
 
         # ATM Strike
         atm_strike = float(round(spot / step) * step)
@@ -304,6 +310,8 @@ class DebateEngine:
 
         try:
             chain_data = await angel_service.get_option_chain(sym, strikes_count=12)
+            if require_live and (not chain_data or chain_data.get("data_source") != "live"):
+                raise ValueError("Live option chain unavailable; debate skipped.")
             if chain_data:
                 pcr = float(chain_data.get("pcr") or 1.05)
                 max_pain = float(chain_data.get("max_pain") or atm_strike)
@@ -317,6 +325,8 @@ class DebateEngine:
                     ce_oi_change = float(tot_ce_chg)
                     pe_oi_change = float(tot_pe_chg)
         except Exception as exc:
+            if require_live:
+                raise ValueError("Live option chain unavailable; debate skipped.") from exc
             logger.debug("Option chain metrics extraction skipped: %s", exc)
 
         # 4. Macro sentiment
@@ -373,7 +383,8 @@ class DebateEngine:
         judge_output = await self.judge_agent.evaluate(snapshot, bull_output, bear_output)
 
         # 4. Construct Debate Session
-        debate_id = f"deb-{int(time.time() * 1000)}"
+        import uuid
+        debate_id = f"deb-{uuid.uuid4().hex}"
         session = DebateSession(
             id=debate_id,
             timestamp=ist_now_str(),
@@ -411,7 +422,7 @@ class DebateEngine:
         for s in mine:
             if s.symbol == sym:
                 return s
-        return mine[0]
+        return None
 
     def get_debate_history(self, limit: int = 30) -> list[DebateSession]:
         """Return chronological list of recent debate sessions."""
@@ -425,7 +436,14 @@ class DebateEngine:
         user_id: Optional[int] = None,
         auto: bool = False,
     ) -> dict[str, Any]:
-        """Execute the Judge's trade in the PaperEngine at the LIVE Angel One option price."""
+        """Serialize execution to prevent duplicate fills of the same verdict."""
+        async with self._execution_lock:
+            return await self._execute_verdict_locked(debate_id, lots, override_payload, user_id, auto)
+
+    async def _execute_verdict_locked(self, debate_id, lots, override_payload, user_id, auto):
+        from replay_engine import replay_engine
+        if replay_engine.is_replaying:
+            raise ValueError("AI trade execution is unavailable during historical replay.")
         session: Optional[DebateSession] = None
         if debate_id == "latest":
             session = self.get_latest_debate(user_id=user_id)
@@ -436,12 +454,12 @@ class DebateEngine:
                     break
         if not session or session.user_id != user_id:
             raise ValueError(f"Debate session #{debate_id} not found.")
-        if session.executed and not override_payload:
+        if session.executed:
             raise ValueError("This debate verdict was already executed.")
 
         judge = session.judge
         verdict = judge.verdict
-        if verdict == "NO_TRADE" and not override_payload:
+        if verdict == "NO_TRADE":
             raise ValueError("Judge verdict was NO_TRADE. Capital preservation active.")
 
         underlying = session.symbol
@@ -468,7 +486,7 @@ class DebateEngine:
         if quote:
             entry_price = quote["ltp"]
             order_symbol = quote["symbol"]
-        elif angel_service.is_configured():
+        elif angel_service.is_configured() or not settings.ALLOW_SIMULATED_TRADING:
             raise ValueError(f"Live price for {underlying} {int(strike)} {opt_type} is unavailable; trade not executed.")
         else:
             entry_price = judge_entry if judge_entry > 0 else 120.0
@@ -499,6 +517,7 @@ class DebateEngine:
             "strike": strike,
             "option_type": opt_type,
             "lots": max(1, lots),
+            "lot_size": quote["lot_size"] if quote else spec["lot_size"],
             "side": "BUY",
             "order_type": "MARKET",
             "price": entry_price,

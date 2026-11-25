@@ -15,6 +15,8 @@ import contextlib
 
 import asyncio
 import logging
+import math
+import json
 import uuid
 from datetime import datetime
 from typing import Any, Optional
@@ -24,7 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import INDEX_CONFIG, get_index_spec, normalize_index_symbol, settings
-from database import PaperTradeModel, PortfolioModel, async_session_factory
+from database import PaperTradeModel, PortfolioModel, PendingOrderModel, async_session_factory
 
 logger = logging.getLogger("paper_engine")
 IST = ZoneInfo("Asia/Kolkata")
@@ -168,7 +170,17 @@ class PaperEngine:
                 stmt = select(PaperTradeModel).where(PaperTradeModel.status == "ACTIVE")
                 res = await session.execute(stmt)
                 trades = res.scalars().all()
+                pending = (await session.execute(select(PendingOrderModel))).scalars().all()
+                restored_orders = {}
+                for row in pending:
+                    order = json.loads(row.payload)
+                    if order.get("replay") or not str(order.get("timestamp", "")).startswith(self._today_date()):
+                        await session.delete(row)
+                    else:
+                        restored_orders[row.id] = order
+                await session.commit()
                 async with self._lock:
+                    self.active_orders.update(restored_orders)
                     for t in trades:
                         td = t.to_dict()
                         td["trade_status"] = "OPEN"
@@ -312,7 +324,6 @@ class PaperEngine:
         """Place a paper trade order (Market, Limit, SL) linked to user."""
         if (
             enforce_hours
-            and str(order_req.get("order_type") or "MARKET").upper() == "MARKET"
             and not self.entry_window_open()
         ):
             return {
@@ -328,7 +339,7 @@ class PaperEngine:
             symbol = str(order_req.get("symbol", "")).strip().upper()
             underlying = normalize_index_symbol(order_req.get("underlying", "NIFTY"))
             spec = get_index_spec(underlying)
-            lot_size = spec["lot_size"]
+            lot_size = int(order_req.get("lot_size") or spec["lot_size"])
 
             def _safe_float(val, default=0.0):
                 if val is None:
@@ -347,9 +358,18 @@ class PaperEngine:
 
             price = _safe_float(order_req.get("price"), 0.0)
             trigger_price = _safe_float(order_req.get("trigger_price"), 0.0)
-            current_ltp = _safe_float(order_req.get("current_ltp"), price if price > 0 else 100.0)
+            current_ltp = _safe_float(order_req.get("current_ltp"), price if price > 0 else 0.0)
             stop_loss = _safe_float(order_req.get("stop_loss")) if order_req.get("stop_loss") is not None else None
             target = _safe_float(order_req.get("target")) if order_req.get("target") is not None else None
+
+            numeric = [strike, price, trigger_price, current_ltp] + [v for v in (stop_loss, target) if v is not None]
+            if (not all(math.isfinite(v) and v >= 0 for v in numeric)
+                or strike <= 0 or lot_size <= 0 or side not in ("BUY", "SELL")
+                or option_type not in ("CE", "PE") or order_type not in ("MARKET", "LIMIT", "SL")
+                or (order_type == "MARKET" and max(price, current_ltp) <= 0)
+                or (order_type == "LIMIT" and price <= 0)
+                or (order_type == "SL" and trigger_price <= 0)):
+                return {"status": "REJECTED", "reject_reason": "Invalid order parameters or price."}
 
             # Generate unique Order ID
             order_id = f"ORD-{uuid.uuid4().hex[:8].upper()}"
@@ -373,6 +393,7 @@ class PaperEngine:
                 "stop_loss": stop_loss,
                 "target": target,
                 "status": "PENDING",
+                "replay": bool(order_req.get("replay")),
             }
 
             # Check execution
@@ -392,7 +413,11 @@ class PaperEngine:
                 return await self._execute_fill(order_record, fill_price, now_time, user_id=uid)
             else:
                 # Add to active pending orders
+                async with async_session_factory() as session:
+                    session.add(PendingOrderModel(id=order_id, user_id=uid, payload=json.dumps(order_record)))
+                    await session.commit()
                 self.active_orders[order_id] = order_record
+                await self._notify_change(uid)
                 return order_record
 
     async def _execute_fill(
@@ -404,9 +429,6 @@ class PaperEngine:
     ) -> dict[str, Any]:
         """Internal helper to fill order, update wallet in DB, and create persistent active trade."""
         uid = user_id if user_id is not None else order.get("user_id")
-        order["status"] = "EXECUTED"
-        order["filled_price"] = round(fill_price, 2)
-        order["filled_time"] = fill_time
         order["user_id"] = uid
 
         quantity = order["quantity"]
@@ -459,6 +481,15 @@ class PaperEngine:
             port = await self._get_or_create_portfolio(session, uid)
             # BUY pays the premium; SELL blocks the same amount as margin. Both are released on
             # exit together with the realised P&L, so the wallet always reconciles.
+            pending = await session.get(PendingOrderModel, order["order_id"])
+            if pending is not None:
+                await session.delete(pending)
+            if not math.isfinite(fill_price) or fill_price <= 0 or order_cost > port.cash_balance:
+                await session.commit()
+                order["status"] = "REJECTED"
+                order["reject_reason"] = "Invalid fill price or insufficient available balance."
+                await self._notify_change(uid)
+                return order
             port.cash_balance = round(port.cash_balance - order_cost, 2)
             port.margin_used = round(port.margin_used + order_cost, 2)
             port.updated_at = fill_time
@@ -490,6 +521,7 @@ class PaperEngine:
             await session.commit()
 
         self.active_positions[pos_id] = position
+        order.update(status="EXECUTED", filled_price=round(fill_price, 2), filled_time=fill_time)
         order["position_id"] = pos_id
         await self._notify_change(uid)
         logger.info(
@@ -505,6 +537,11 @@ class PaperEngine:
                 order = self.active_orders[order_id]
                 if order.get("user_id") != user_id:
                     return {"status": "ERROR", "message": f"Order {order_id} not found or already filled."}
+                async with async_session_factory() as session:
+                    row = await session.get(PendingOrderModel, order_id)
+                    if row is not None:
+                        await session.delete(row)
+                        await session.commit()
                 self.active_orders.pop(order_id)
                 order["status"] = "CANCELLED"
                 order["cancelled_time"] = self._now_ist()
@@ -547,7 +584,6 @@ class PaperEngine:
             if pos is not None:
                 if not system and pos.get("user_id") != user_id:
                     return not_found
-                self.active_positions.pop(pos_id, None)
             else:
                 # Check DB if not found in memory
                 async with async_session_factory() as session:
@@ -634,6 +670,7 @@ class PaperEngine:
                     session.add(db_trade)
                 await session.commit()
 
+            self.active_positions.pop(pos_id, None)
             trade_status = "STOP_LOSS_HIT" if reason == "STOP_LOSS_HIT" else ("TARGET_HIT" if reason == "TARGET_HIT" else "CLOSED")
             trade_record = {
                 "id": pos_id,
@@ -743,16 +780,12 @@ class PaperEngine:
                 pid for pid, pos in self.active_positions.items()
                 if pos.get("user_id") == user_id
             ]
-            for pid in pids_to_remove:
-                self.active_positions.pop(pid, None)
 
             # Clear active orders in memory for this user
             oids_to_remove = [
                 oid for oid, ord_rec in self.active_orders.items()
                 if ord_rec.get("user_id") == user_id
             ]
-            for oid in oids_to_remove:
-                self.active_orders.pop(oid, None)
 
             # Update portfolio in SQLite DB
             async with async_session_factory() as session:
@@ -762,6 +795,10 @@ class PaperEngine:
                 port.margin_used = 0.0
                 port.updated_at = self._now_ist()
 
+                order_owner = PendingOrderModel.user_id.is_(None) if user_id is None else PendingOrderModel.user_id == user_id
+                pending = (await session.execute(select(PendingOrderModel).where(order_owner))).scalars().all()
+                for row in pending:
+                    await session.delete(row)
                 # Close this account's still-open DB positions too, or they would be restored
                 # (and re-tracked) the next time the server restarts.
                 owner = PaperTradeModel.user_id.is_(None) if user_id is None else PaperTradeModel.user_id == user_id
@@ -777,6 +814,10 @@ class PaperEngine:
                     t.closed_at = self._now_ist()
                 await session.commit()
 
+            for pid in pids_to_remove:
+                self.active_positions.pop(pid, None)
+            for oid in oids_to_remove:
+                self.active_orders.pop(oid, None)
             logger.info("Paper trading wallet reset to ₹%.2f (user_id=%s)", initial_capital, user_id)
             await self._notify_change(user_id)
             return {
@@ -872,7 +913,7 @@ class PaperEngine:
                 daily.append(t)
         return daily
 
-    async def update_market_prices(self, quotes: dict[str, float]) -> None:
+    async def update_market_prices(self, quotes: dict[str, float], *, replay_owner: Optional[int] = None, replay: bool = False) -> None:
         """Update active positions MTM and execute pending SL / Target triggers."""
         async with self._lock:
             if not self.active_positions and not self.active_orders:
@@ -883,13 +924,16 @@ class PaperEngine:
 
             # 1. Update Positions MTM and check SL/Target
             for pos_id, pos in list(self.active_positions.items()):
+                if replay and (replay_owner is None or pos.get("user_id") != replay_owner):
+                    continue
                 sym = pos["symbol"]
                 ltp = quotes.get(sym)
                 if ltp is None:
-                    alt_key = f"{int(pos['strike'])}{pos['option_type']}"
-                    ltp = quotes.get(alt_key)
+                    alt_key = f"{pos['underlying']}{int(pos['strike'])}{pos['option_type']}"
+                    if replay or sym == alt_key:
+                        ltp = quotes.get(alt_key)
 
-                if ltp is not None and ltp > 0:
+                if ltp is not None and math.isfinite(ltp) and ltp > 0:
                     pos["current_ltp"] = round(ltp, 2)
                     pos["ltp"] = round(ltp, 2)
                     pos["live_price"] = round(ltp, 2)
@@ -907,19 +951,19 @@ class PaperEngine:
                     sl = pos.get("stop_loss")
                     if sl is not None and sl > 0:
                         if (side == "BUY" and ltp <= sl) or (side == "SELL" and ltp >= sl):
-                            exited_positions.append((pos_id, sl, "STOP_LOSS_HIT", pos.get("user_id")))
+                            exited_positions.append((pos_id, round(ltp, 2), "STOP_LOSS_HIT", pos.get("user_id")))
                             continue
 
                     # Check Target trigger
                     tgt = pos.get("target")
                     if tgt is not None and tgt > 0:
                         if (side == "BUY" and ltp >= tgt) or (side == "SELL" and ltp <= tgt):
-                            exited_positions.append((pos_id, tgt, "TARGET_HIT", pos.get("user_id")))
+                            exited_positions.append((pos_id, round(ltp, 2), "TARGET_HIT", pos.get("user_id")))
                             continue
 
             # Process triggers
             for pos_id, exit_p, reason, uid in exited_positions:
-                pos = self.active_positions.pop(pos_id, None)
+                pos = self.active_positions.get(pos_id)
                 if not pos:
                     continue
                 quantity = pos["quantity"]
@@ -959,6 +1003,7 @@ class PaperEngine:
                         db_trade.pnl_pct = pnl_pct
                     await session.commit()
 
+                self.active_positions.pop(pos_id, None)
                 logger.info(
                     "Automated %s on %s @ ₹%.2f. Net PnL: ₹%.2f (Charges: ₹%.2f, user_id=%s)",
                     reason, pos["symbol"], exit_p, realized_pnl, charges["total_charges"], uid,
@@ -968,13 +1013,27 @@ class PaperEngine:
             # 2. Check Pending Limit / Stop-Loss orders
             executed_orders: list[tuple[str, float]] = []
             for order_id, order in list(self.active_orders.items()):
+                if replay and (replay_owner is None or order.get("user_id") != replay_owner):
+                    continue
+                if not replay and (order.get("replay") or not str(order.get("timestamp", "")).startswith(self._today_date())):
+                    async with async_session_factory() as session:
+                        row = await session.get(PendingOrderModel, order_id)
+                        if row is not None:
+                            await session.delete(row)
+                            await session.commit()
+                    self.active_orders.pop(order_id, None)
+                    await self._notify_change(order.get("user_id"))
+                    continue
+                if not replay and not self.entry_window_open():
+                    continue
                 sym = order["symbol"]
                 ltp = quotes.get(sym)
                 if ltp is None:
-                    alt_key = f"{int(order['strike'])}{order['option_type']}"
-                    ltp = quotes.get(alt_key)
+                    alt_key = f"{order['underlying']}{int(order['strike'])}{order['option_type']}"
+                    if replay or sym == alt_key:
+                        ltp = quotes.get(alt_key)
 
-                if ltp is not None and ltp > 0:
+                if ltp is not None and math.isfinite(ltp) and ltp > 0:
                     order_type = order["order_type"]
                     side = order["side"]
                     limit_p = order["price"]
@@ -986,10 +1045,10 @@ class PaperEngine:
                     if order_type == "LIMIT":
                         if side == "BUY" and ltp <= limit_p:
                             should_fill = True
-                            fill_p = limit_p
+                            fill_p = ltp
                         elif side == "SELL" and ltp >= limit_p:
                             should_fill = True
-                            fill_p = limit_p
+                            fill_p = ltp
                     elif order_type == "SL":
                         if side == "BUY" and ltp >= trig_p:
                             should_fill = True
@@ -1002,9 +1061,11 @@ class PaperEngine:
                         executed_orders.append((order_id, fill_p))
 
             for order_id, fill_p in executed_orders:
-                order = self.active_orders.pop(order_id, None)
+                order = self.active_orders.get(order_id)
                 if order:
                     await self._execute_fill(order, fill_p, now_time, user_id=order.get("user_id"))
+                    self.active_orders.pop(order_id, None)
+                    await self._notify_change(order.get("user_id"))
 
 
 # Singleton accessor

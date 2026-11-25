@@ -2,9 +2,10 @@ import pytest
 import asyncio
 from datetime import datetime
 from sqlalchemy import delete
-from database import init_db, async_session_factory, DailyReportModel, PaperTradeModel
+from database import init_db, async_session_factory, DailyReportModel, PaperTradeModel, UserModel
 from paper_engine import paper_engine
 from agents.report_agent import report_agent
+from auth import create_access_token
 from main import app
 from httpx import AsyncClient, ASGITransport
 
@@ -14,8 +15,21 @@ async def test_end_to_end_positions_and_reports():
     async with async_session_factory() as session:
         await session.execute(delete(DailyReportModel))
         await session.execute(delete(PaperTradeModel))
+        # Create test user for authenticated E2E verification
+        test_user = UserModel(
+            username="e2e_tester",
+            email="e2e_tester@example.com",
+            hashed_password="test_hash"
+        )
+        session.add(test_user)
         await session.commit()
-    await paper_engine.reset_portfolio(1000000.0)
+        await session.refresh(test_user)
+        uid = test_user.id
+
+    token = create_access_token(data={"sub": str(uid), "username": "e2e_tester", "email": "e2e_tester@example.com"})
+    headers = {"Authorization": f"Bearer {token}"}
+
+    await paper_engine.reset_portfolio(1000000.0, user_id=uid)
     
     # 1. Place a BUY trade with SL and Target
     order1 = await paper_engine.place_order(
@@ -31,12 +45,13 @@ async def test_end_to_end_positions_and_reports():
             "stop_loss": 90.0,
             "target": 160.0
         },
+        user_id=uid,
         enforce_hours=False
     )
     assert order1.get("status") in ["SUCCESS", "EXECUTED"] or order1.get("position_id")
     
     # Check open state
-    state = await paper_engine.get_state()
+    state = await paper_engine.get_state(user_id=uid)
     assert len(state["positions"]) == 1
     assert state["positions"][0]["trade_status"] == "OPEN"
     assert state["positions"][0]["stop_loss"] == 90.0
@@ -46,7 +61,7 @@ async def test_end_to_end_positions_and_reports():
     await paper_engine.update_market_prices({"NIFTY24900CE": 165.0})
     
     # Verify it hit target and moved to closed trades
-    state = await paper_engine.get_state()
+    state = await paper_engine.get_state(user_id=uid)
     assert len(state["positions"]) == 0
     assert len(state["closed_positions"]) == 1
     assert state["closed_positions"][0]["trade_status"] == "TARGET_HIT"
@@ -69,13 +84,14 @@ async def test_end_to_end_positions_and_reports():
             "stop_loss": 170.0,
             "target": 260.0
         },
+        user_id=uid,
         enforce_hours=False
     )
-    
+
     # Simulate price movement hitting SL (LTP drops to 165.0)
     await paper_engine.update_market_prices({"BANKNIFTY52000PE": 165.0})
-    
-    state = await paper_engine.get_state()
+
+    state = await paper_engine.get_state(user_id=uid)
     assert len(state["positions"]) == 0
     assert len(state["closed_positions"]) == 2
     assert state["statistics"]["sl_hit_count"] == 1
@@ -83,7 +99,7 @@ async def test_end_to_end_positions_and_reports():
     assert len(state["all_trades"]) == 2
     
     # 4. Test API Endpoints via ASGI test client
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=headers) as ac:
         # GET /api/trading/state
         resp = await ac.get("/api/trading/state")
         assert resp.status_code == 200

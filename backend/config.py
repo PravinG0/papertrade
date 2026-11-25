@@ -50,7 +50,7 @@ class Settings(BaseSettings):
 
     # ── Database & Auth Configuration ────────────────────────────────────
     DATABASE_URL: str = Field(
-        default="sqlite+aiosqlite:////home/pravin/Documents/Trading/papertrade/backend/papertrade.db"
+        default=f"sqlite+aiosqlite:///{Path(__file__).resolve().parent / 'papertrade.db'}"
     )
     JWT_SECRET_KEY: str = Field(
         default="tradelab_papertrade_jwt_secret_key_super_secure_99182"
@@ -75,6 +75,7 @@ class Settings(BaseSettings):
 
     # ── Testing switch: allow opening trades outside 09:15-15:15 IST (disables auto square-off) ──
     ALLOW_OFFHOURS_TRADING: bool = Field(default=False)
+    ALLOW_SIMULATED_TRADING: bool = Field(default=False)
 
     # ── Scrip Master Cache Path ───────────────────────────────────────────
     SCRIP_CACHE_PATH: str = Field(
@@ -88,7 +89,7 @@ settings = Settings()
 # token for any user. If JWT_SECRET_KEY was not set to something private, derive a stable secret
 # from private values already in the environment (so sessions survive restarts) and warn.
 _DEFAULT_JWT = "tradelab_papertrade_jwt_secret_key_super_secure_99182"
-if settings.JWT_SECRET_KEY == _DEFAULT_JWT:
+if not settings.JWT_SECRET_KEY or settings.JWT_SECRET_KEY == _DEFAULT_JWT:
     import hashlib
     import logging as _logging
 
@@ -105,8 +106,10 @@ if settings.JWT_SECRET_KEY == _DEFAULT_JWT:
             "Set JWT_SECRET_KEY to a long random string in your host's environment."
         )
     else:
+        import secrets
+        settings.JWT_SECRET_KEY = secrets.token_urlsafe(48)
         _logging.getLogger("tradelab.config").warning(
-            "JWT_SECRET_KEY is the public default. Set it before deploying anywhere public."
+            "Using an ephemeral JWT secret; sessions reset on restart. Set a private JWT_SECRET_KEY."
         )
 
 # ── Index Configurations & Constants ─────────────────────────────────────────

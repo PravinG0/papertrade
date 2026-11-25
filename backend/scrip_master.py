@@ -219,6 +219,9 @@ class ScripMaster:
         c = self._by_symbol.get(symbol)
         if c:
             return c
+        # Never roll a dated contract into a different expiry. Only legacy undated symbols may fall back.
+        if symbol != f"{underlying}{int(strike)}{opt}":
+            return None
         exps = self.expiries(underlying)
         for e in exps:
             c = self._by_key.get((underlying, e, int(strike), opt))

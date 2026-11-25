@@ -55,20 +55,22 @@ class ConnectionManager:
     """Manages real-time WebSocket connections for live terminal tick broadcasting."""
 
     def __init__(self) -> None:
-        self.active_connections: list[WebSocket] = []
+        self.active_connections: dict[WebSocket, Optional[int]] = {}
 
-    async def connect(self, websocket: WebSocket) -> None:
+    async def connect(self, websocket: WebSocket, user_id: Optional[int]) -> None:
         await websocket.accept()
-        self.active_connections.append(websocket)
+        self.active_connections[websocket] = user_id
         logger.info("WebSocket terminal client connected. Total clients: %d", len(self.active_connections))
 
     def disconnect(self, websocket: WebSocket) -> None:
         if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+            self.active_connections.pop(websocket, None)
             logger.info("WebSocket terminal client disconnected. Remaining: %d", len(self.active_connections))
 
     async def broadcast(self, message: dict[str, Any]) -> None:
-        for connection in list(self.active_connections):
+        for connection, owner_id in list(self.active_connections.items()):
+            if message.get("type") == "ORDER_UPDATE" and (owner_id is None or owner_id != message.get("user_id")):
+                continue
             try:
                 await connection.send_json(message)
             except Exception:
@@ -80,7 +82,7 @@ ws_manager = ConnectionManager()
 
 async def _on_paper_trading_change(user_id: Optional[int] = None) -> None:
     """Callback triggered whenever paper_engine creates, fills, updates, or exits trades."""
-    if ws_manager.active_connections:
+    if user_id is not None and user_id in ws_manager.active_connections.values():
         try:
             state = await paper_engine.get_state(user_id=user_id)
             await ws_manager.broadcast({
@@ -97,6 +99,20 @@ paper_engine.register_change_callback(_on_paper_trading_change)
 _last_eod_report_date: Optional[str] = None
 
 
+async def _generate_eod_reports(date_str: str) -> None:
+    """Generate separate reports only for accounts with trades that day."""
+    async with async_session_factory() as session:
+        rows = await session.execute(select(PaperTradeModel.user_id).where(
+            (PaperTradeModel.created_at.startswith(date_str) | PaperTradeModel.closed_at.startswith(date_str))).distinct())
+        owners = rows.scalars().all()
+    for uid in owners:
+        try:
+            await report_agent.get_or_generate_report(date_str=date_str, user_id=uid, force_refresh=True)
+        except Exception:
+            logger.exception("Automatic report failed for account %s", uid)
+
+
+
 async def _periodic_mtm_loop() -> None:
     """Periodically update paper positions MTM (with REAL Angel One option prices) and square-off."""
     global _last_eod_report_date
@@ -104,16 +120,17 @@ async def _periodic_mtm_loop() -> None:
         try:
             await asyncio.sleep(0.5)
             # Check 15:15 IST MIS Auto Square-off
-            await paper_engine.check_intraday_squareoff()
+            if not replay_engine.is_replaying:
+                await paper_engine.check_intraday_squareoff()
 
             # Automatic End-of-Day Daily Trading Report generation at 15:30 IST
             now_dt = datetime.now(tz=ZoneInfo("Asia/Kolkata"))
             today_str = now_dt.strftime("%Y-%m-%d")
             time_str = now_dt.strftime("%H:%M:%S")
-            if time_str >= "15:30:00" and _last_eod_report_date != today_str:
+            if now_dt.weekday() < 5 and time_str >= "15:30:00" and _last_eod_report_date != today_str:
                 _last_eod_report_date = today_str
                 logger.info("Market closed at %s. Triggering automatic Daily Trading Report for %s.", time_str, today_str)
-                asyncio.create_task(report_agent.generate_daily_report(date_str=today_str))
+                asyncio.create_task(_generate_eod_reports(today_str))
 
             if replay_engine.is_replaying and _is_market_open() and not settings.ALLOW_OFFHOURS_TRADING:
                 logger.info("Market opened: stopping Historical Replay so live prices resume.")
@@ -145,7 +162,7 @@ async def _periodic_mtm_loop() -> None:
                         + list(paper_engine.active_orders.values())
                     ]
                     quotes_dict.update(await angel_service.get_option_ltps(legs))
-                else:
+                elif settings.ALLOW_SIMULATED_TRADING:
                     # Offline / dev mode only: theoretical Black-Scholes prices
                     for s in spots:
                         sym = s["symbol"]
@@ -158,8 +175,6 @@ async def _periodic_mtm_loop() -> None:
                             k = atm + (offset * step)
                             ce_p = BlackScholesEngine.calculate_price(spot_p, k, 3.0 / 365.0, iv=0.15, option_type="CE")
                             pe_p = BlackScholesEngine.calculate_price(spot_p, k, 3.0 / 365.0, iv=0.15, option_type="PE")
-                            quotes_dict[f"{k}CE"] = ce_p
-                            quotes_dict[f"{k}PE"] = pe_p
                             quotes_dict[f"{sym}{k}CE"] = ce_p
                             quotes_dict[f"{sym}{k}PE"] = pe_p
 
@@ -249,17 +264,17 @@ class OrderCreateRequest(BaseModel):
     order_type: str = Field(default="MARKET", description="MARKET, LIMIT, or SL")
     price: float = Field(default=0.0, description="Limit price for LIMIT orders")
     trigger_price: float = Field(default=0.0, description="Trigger price for SL orders")
-    stop_loss: Optional[float] = Field(default=None, description="Optional stop loss level")
-    target: Optional[float] = Field(default=None, description="Optional profit target level")
+    stop_loss: Optional[float] = Field(default=None, ge=0, description="Optional stop loss level")
+    target: Optional[float] = Field(default=None, ge=0, description="Optional profit target level")
     current_ltp: Optional[float] = Field(default=None, description="Current LTP estimate")
     expiry: Optional[str] = Field(default=None, description="Expiry ISO date (YYYY-MM-DD); nearest if omitted")
-    stop_loss_pct: Optional[float] = Field(default=None, description="SL as % below the live fill price")
-    target_pct: Optional[float] = Field(default=None, description="Target as % above the live fill price")
+    stop_loss_pct: Optional[float] = Field(default=None, gt=0, lt=100, description="SL as % below the live fill price")
+    target_pct: Optional[float] = Field(default=None, gt=0, description="Target as % above the live fill price")
 
 
 class UpdateSLRequest(BaseModel):
-    stop_loss: Optional[float] = Field(default=None)
-    target: Optional[float] = Field(default=None)
+    stop_loss: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    target: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class ReplayStartRequest(BaseModel):
@@ -315,20 +330,21 @@ class ReportGenerateRequest(BaseModel):
 @app.websocket("/ws/terminal")
 async def websocket_terminal_endpoint(websocket: WebSocket, token: Optional[str] = Query(None)):
     """Real-time streaming tick feed for options chain, MTM, and order updates."""
-    await ws_manager.connect(websocket)
+    user_id: Optional[int] = None
+    if token:
+        try:
+            payload = decode_access_token(token)
+            user_id = int(payload["sub"])
+            async with async_session_factory() as session:
+                if await session.get(UserModel, user_id) is None:
+                    raise ValueError("Unknown user")
+        except Exception:
+            await websocket.close(code=1008)
+            return
+    await ws_manager.connect(websocket, user_id)
     try:
-        user_id: Optional[int] = None
-        if token:
-            try:
-                payload = decode_access_token(token)
-                if payload and "sub" in payload:
-                    user_id = int(payload["sub"])
-            except Exception as e:
-                logger.debug("WebSocket token decode non-fatal: %s", e)
-                user_id = None
-
         spots = await angel_service.get_spot_indices()
-        state = await paper_engine.get_state(user_id=user_id)
+        state = await paper_engine.get_state(user_id=user_id) if user_id is not None else None
         replay = replay_engine.get_state()
         await websocket.send_json({
             "type": "INIT",
@@ -394,7 +410,7 @@ async def get_system_status():
     replay_state = replay_engine.get_state()
     return {
         "status": "ONLINE",
-        "angel_one_connected": angel_configured,
+        "angel_one_connected": angel_configured and angel_service.data_source == "live",
         "data_source": angel_service.data_source,
         "vix": angel_service.vix,
         "market_open": _is_market_open(),
@@ -509,12 +525,12 @@ async def get_option_chain(
         if current_tick:
             override_spot = current_tick["close"]
 
-    chain = await angel_service.get_option_chain(
-        symbol=symbol,
-        strikes_count=strikes,
-        expiry=expiry,
-        override_spot=override_spot,
-    )
+    try:
+        chain = await angel_service.get_option_chain(
+            symbol=symbol, strikes_count=strikes, expiry=expiry, override_spot=override_spot,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return chain
 
 
@@ -525,14 +541,14 @@ class PositionExitRequest(BaseModel):
 
 # ── Paper Trading Execution Endpoints ────────────────────────────────────────
 @app.get("/api/trading/state")
-async def get_trading_state(current_user: Optional[UserModel] = Depends(get_optional_user)):
+async def get_trading_state(current_user: Optional[UserModel] = Depends(get_current_user)):
     """Return virtual wallet, active positions, pending orders, and P&L."""
     user_id = current_user.id if current_user else None
     return await paper_engine.get_state(user_id=user_id)
 
 
 @app.post("/api/trading/order")
-async def place_paper_order(order: OrderCreateRequest, current_user: Optional[UserModel] = Depends(get_optional_user)):
+async def place_paper_order(order: OrderCreateRequest, current_user: Optional[UserModel] = Depends(get_current_user)):
     """Place a paper trade order (Market, Limit, SL)."""
     user_id = current_user.id if current_user else None
     order_data = order.model_dump()
@@ -540,14 +556,24 @@ async def place_paper_order(order: OrderCreateRequest, current_user: Optional[Us
 
     # If in replay mode and current_ltp not supplied, calculate from replay tick
     replaying_for_me = replay_engine.is_replaying and user_id is not None and replay_engine.owner_id == user_id
-    if replaying_for_me and (order_data.get("current_ltp") is None or order_data["current_ltp"] <= 0):
+    if replay_engine.is_replaying and not replaying_for_me:
+        raise HTTPException(status_code=409, detail="Historical replay is active; new live orders are temporarily blocked.")
+    if replaying_for_me:
+        order_data["replay"] = True
         current_tick = replay_engine.get_current_tick()
         if current_tick:
+            if normalize_index_symbol(order_data["underlying"]) != replay_engine.symbol:
+                raise HTTPException(status_code=400, detail="Order must match the replay index.")
+            if datetime.fromtimestamp(current_tick["time"], tz=ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S") >= "15:15:00":
+                raise HTTPException(status_code=400, detail="Replay entry window is closed.")
             spot = current_tick["close"]
             strike = order_data.get("strike", spot)
             opt_type = order_data.get("option_type", "CE")
             calc_ltp = BlackScholesEngine.calculate_price(spot, strike, 3.0 / 365.0, iv=0.15, option_type=opt_type)
             order_data["current_ltp"] = calc_ltp
+            order_data["symbol"] = f"{replay_engine.symbol}{int(strike)}{opt_type}"
+        else:
+            raise HTTPException(status_code=503, detail="Replay price unavailable.")
 
     if not replaying_for_me:
         quote = await angel_service.get_option_quote(
@@ -559,10 +585,11 @@ async def place_paper_order(order: OrderCreateRequest, current_user: Optional[Us
         if quote:
             # Use the exchange trading symbol and the live Angel One price (not the client's guess)
             order_data["symbol"] = quote["symbol"]
+            order_data["lot_size"] = quote["lot_size"]
             if str(order_data.get("order_type", "MARKET")).upper() == "MARKET":
                 order_data["current_ltp"] = quote["ltp"]
                 order_data["price"] = quote["ltp"]
-        elif angel_service.data_source == "live" and str(order_data.get("order_type", "MARKET")).upper() == "MARKET":
+        elif angel_service.is_configured() or not settings.ALLOW_SIMULATED_TRADING:
             raise HTTPException(
                 status_code=503,
                 detail="Live option price unavailable for this contract right now. Please retry in a moment.",
@@ -591,7 +618,7 @@ async def place_paper_order(order: OrderCreateRequest, current_user: Optional[Us
 
 @app.delete("/api/trading/order/{order_id}")
 @app.post("/api/trading/order/{order_id}/cancel")
-async def cancel_paper_order(order_id: str, current_user: Optional[UserModel] = Depends(get_optional_user)):
+async def cancel_paper_order(order_id: str, current_user: Optional[UserModel] = Depends(get_current_user)):
     """Cancel a pending paper order."""
     user_id = current_user.id if current_user else None
     result = await paper_engine.cancel_order(order_id, user_id=user_id)
@@ -604,7 +631,7 @@ async def cancel_paper_order(order_id: str, current_user: Optional[UserModel] = 
 async def exit_paper_position(
     pos_id: str,
     exit_price: Optional[float] = Query(default=None),
-    current_user: Optional[UserModel] = Depends(get_optional_user),
+    current_user: Optional[UserModel] = Depends(get_current_user),
 ):
     """Exit / square off an active paper position at market price or specified limit."""
     user_id = current_user.id if current_user else None
@@ -635,7 +662,7 @@ async def exit_paper_position(
 @app.post("/api/trading/exit")
 async def exit_paper_position_legacy(
     req: PositionExitRequest,
-    current_user: Optional[UserModel] = Depends(get_optional_user),
+    current_user: Optional[UserModel] = Depends(get_current_user),
 ):
     """Legacy exit position endpoint by JSON body."""
     if not req.position_id:
@@ -645,7 +672,7 @@ async def exit_paper_position_legacy(
 
 @app.post("/api/trading/exit-all")
 @app.post("/api/trading/positions/exit-all")
-async def exit_all_paper_positions(current_user: Optional[UserModel] = Depends(get_optional_user)):
+async def exit_all_paper_positions(current_user: Optional[UserModel] = Depends(get_current_user)):
     """Exit / square off all active paper positions at current market price."""
     user_id = current_user.id if current_user else None
     results = await paper_engine.exit_all_positions(user_id=user_id)
@@ -664,7 +691,7 @@ async def exit_all_paper_positions(current_user: Optional[UserModel] = Depends(g
 async def update_position_stop_loss(
     pos_id: str,
     req: UpdateSLRequest,
-    current_user: Optional[UserModel] = Depends(get_optional_user),
+    current_user: Optional[UserModel] = Depends(get_current_user),
 ):
     """Update stop loss and target for an active position."""
     user_id = current_user.id if current_user else None
@@ -675,7 +702,7 @@ async def update_position_stop_loss(
 
 
 @app.post("/api/trading/reset")
-async def reset_paper_wallet(current_user: Optional[UserModel] = Depends(get_optional_user)):
+async def reset_paper_wallet(current_user: Optional[UserModel] = Depends(get_current_user)):
     """Reset virtual trading wallet back to default ₹10,00,000 INR."""
     user_id = current_user.id if current_user else None
     res = await paper_engine.reset_portfolio(
@@ -692,21 +719,21 @@ async def reset_paper_wallet(current_user: Optional[UserModel] = Depends(get_opt
 
 
 @app.get("/api/trading/history")
-async def get_trading_history(current_user: Optional[UserModel] = Depends(get_optional_user)):
+async def get_trading_history(current_user: Optional[UserModel] = Depends(get_current_user)):
     """Return closed trade history journal."""
     user_id = current_user.id if current_user else None
     return await paper_engine.get_history(user_id=user_id)
 
 
 @app.get("/api/trading/all-trades")
-async def get_all_trading_positions(current_user: Optional[UserModel] = Depends(get_optional_user)):
+async def get_all_trading_positions(current_user: Optional[UserModel] = Depends(get_current_user)):
     """Return all executed trades (active positions and closed history) for the user."""
     user_id = current_user.id if current_user else None
     return await paper_engine.get_all_trades(user_id=user_id)
 
 
 @app.get("/api/trading/export")
-async def export_trading_history_csv(current_user: Optional[UserModel] = Depends(get_optional_user)):
+async def export_trading_history_csv(current_user: Optional[UserModel] = Depends(get_current_user)):
     """Export closed trades as a downloadable CSV report."""
     import csv
     import io
@@ -778,6 +805,8 @@ def _replay_guard(current_user: Optional[UserModel], starting: bool) -> int:
     sign-in required, never while the market is open, and only one account at a time."""
     if current_user is None:
         raise HTTPException(status_code=401, detail="Sign in to use Historical Replay.")
+    if starting and (paper_engine.active_positions or paper_engine.active_orders):
+        raise HTTPException(status_code=409, detail="Close open positions and cancel pending orders before starting replay.")
     if starting and _is_market_open() and not settings.ALLOW_OFFHOURS_TRADING:
         raise HTTPException(
             status_code=409,
@@ -791,20 +820,19 @@ def _replay_guard(current_user: Optional[UserModel], starting: bool) -> int:
 
 @app.post("/api/replay/start")
 async def start_historical_replay(
-    req: ReplayStartRequest, current_user: Optional[UserModel] = Depends(get_optional_user)
+    req: ReplayStartRequest, current_user: Optional[UserModel] = Depends(get_current_user)
 ):
     """Start 1-minute historical candle replay for a date."""
     uid = _replay_guard(current_user, starting=True)
-    result = await replay_engine.start_replay(date_str=req.date, symbol=req.symbol)
+    result = await replay_engine.start_replay(date_str=req.date, symbol=req.symbol, owner_id=uid)
     if result.get("status") == "ERROR":
         raise HTTPException(status_code=400, detail=result.get("message"))
-    replay_engine.owner_id = uid
     return result
 
 
 @app.post("/api/replay/control")
 async def control_historical_replay(
-    req: ReplayControlRequest, current_user: Optional[UserModel] = Depends(get_optional_user)
+    req: ReplayControlRequest, current_user: Optional[UserModel] = Depends(get_current_user)
 ):
     """Control replay playback (pause, resume, speed, step_forward, step_backward, stop)."""
     _replay_guard(current_user, starting=False)
@@ -878,7 +906,7 @@ async def get_pcr_oi_analytics(
 
 @app.get("/api/analytics/pnl-calendar")
 @app.get("/api/trading/pnl-calendar")
-async def get_pnl_calendar(current_user: Optional[UserModel] = Depends(get_optional_user)):
+async def get_pnl_calendar(current_user: Optional[UserModel] = Depends(get_current_user)):
     """Return daily P&L heatmap data for trading journal calendar."""
     user_id = current_user.id if current_user else None
     return await paper_engine.get_pnl_calendar(user_id=user_id)
@@ -888,7 +916,7 @@ async def get_pnl_calendar(current_user: Optional[UserModel] = Depends(get_optio
 @app.get("/api/reports/daily")
 async def get_daily_trading_report(
     date: Optional[str] = Query(default=None),
-    current_user: Optional[UserModel] = Depends(get_optional_user),
+    current_user: Optional[UserModel] = Depends(get_current_user),
 ):
     """Fetch or generate the comprehensive Daily Trading Report with AI analysis."""
     user_id = current_user.id if current_user else None
@@ -900,7 +928,7 @@ async def get_daily_trading_report(
 async def generate_daily_trading_report(
     req: Optional[ReportGenerateRequest] = None,
     date: Optional[str] = Query(default=None),
-    current_user: Optional[UserModel] = Depends(get_optional_user),
+    current_user: Optional[UserModel] = Depends(get_current_user),
 ):
     """Force re-generate the Daily Trading Report with refreshed AI analysis."""
     user_id = current_user.id if current_user else None
@@ -910,7 +938,7 @@ async def generate_daily_trading_report(
 
 @app.get("/api/reports/dates")
 async def get_available_report_dates(
-    current_user: Optional[UserModel] = Depends(get_optional_user),
+    current_user: Optional[UserModel] = Depends(get_current_user),
 ):
     """Return list of dates with executed trades or generated reports."""
     user_id = current_user.id if current_user else None
@@ -943,7 +971,7 @@ async def get_available_report_dates(
 async def export_daily_trading_report(
     date: Optional[str] = Query(default=None),
     format: str = Query(default="markdown"),
-    current_user: Optional[UserModel] = Depends(get_optional_user),
+    current_user: Optional[UserModel] = Depends(get_current_user),
 ):
     """Download daily trading report as Markdown or JSON file."""
     from fastapi.responses import Response
@@ -987,7 +1015,7 @@ async def calculate_payoff_endpoint(req: PayoffRequest):
 async def run_debate_endpoint(
     req: Optional[DebateRunRequest] = None,
     symbol: Optional[str] = Query(default=None),
-    current_user: Optional[UserModel] = Depends(get_optional_user),
+    current_user: Optional[UserModel] = Depends(get_current_user),
 ):
     """Trigger live multi-agent AI debate (Bull vs Bear vs Judge) for NIFTY or BANKNIFTY."""
     target_symbol = symbol or (req.symbol if req else "NIFTY")
@@ -1004,7 +1032,7 @@ async def run_debate_endpoint(
 @app.get("/api/debate/latest")
 async def get_latest_debate_endpoint(
     symbol: Optional[str] = Query(default=None),
-    current_user: Optional[UserModel] = Depends(get_optional_user),
+    current_user: Optional[UserModel] = Depends(get_current_user),
 ):
     """The signed-in user's latest debate (never triggers a new debate)."""
     return debate_engine.get_latest_debate(symbol=symbol, user_id=current_user.id if current_user else None)
@@ -1013,7 +1041,7 @@ async def get_latest_debate_endpoint(
 @app.get("/api/debate/history")
 async def get_debate_history_endpoint(
     limit: int = Query(default=20, ge=1, le=100),
-    current_user: Optional[UserModel] = Depends(get_optional_user),
+    current_user: Optional[UserModel] = Depends(get_current_user),
 ):
     """Historical AI debates; executed ones include their trade outcome (SL / target / P&L)."""
     return await debate_engine.get_history_with_outcomes(
@@ -1025,7 +1053,7 @@ async def get_debate_history_endpoint(
 async def execute_debate_verdict_endpoint(
     debate_id: str,
     req: Optional[DebateExecuteRequest] = None,
-    current_user: Optional[UserModel] = Depends(get_optional_user),
+    current_user: Optional[UserModel] = Depends(get_current_user),
 ):
     """Execute the Judge's recommended trade directly into the Paper Trading portfolio."""
     try:
@@ -1051,7 +1079,7 @@ async def execute_debate_verdict_endpoint(
 @app.post("/api/scheduler/start")
 async def start_scheduler_endpoint(
     req: SchedulerStartRequest,
-    current_user: Optional[UserModel] = Depends(get_optional_user),
+    current_user: Optional[UserModel] = Depends(get_current_user),
 ):
     """Start automated periodic background debating (trades go to the caller's paper account)."""
     uid = current_user.id if current_user else None
@@ -1070,7 +1098,7 @@ async def start_scheduler_endpoint(
 
 
 @app.post("/api/scheduler/stop")
-async def stop_scheduler_endpoint(current_user: Optional[UserModel] = Depends(get_optional_user)):
+async def stop_scheduler_endpoint(current_user: Optional[UserModel] = Depends(get_current_user)):
     """Stop automated periodic background debating (only the account that started it)."""
     uid = current_user.id if current_user else None
     try:
@@ -1081,7 +1109,7 @@ async def stop_scheduler_endpoint(current_user: Optional[UserModel] = Depends(ge
 
 
 @app.get("/api/scheduler/status")
-async def get_scheduler_status_endpoint(current_user: Optional[UserModel] = Depends(get_optional_user)):
+async def get_scheduler_status_endpoint(current_user: Optional[UserModel] = Depends(get_current_user)):
     """Scheduler status as seen by the caller (another account's schedule is reported as off)."""
     return get_scheduler().get_status(current_user.id if current_user else None)
 

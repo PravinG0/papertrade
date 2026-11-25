@@ -92,8 +92,11 @@ export default function App() {
   const [showCalculator, setShowCalculator] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const handleOpenOrder = useCallback(
-    (data) => setOrderModalData({ ...data, marketOpen: feedInfo.marketOpen }),
-    [feedInfo.marketOpen]
+    (data) => {
+      if (!user) { setAuthModalTab("login"); setShowAuthModal(true); return; }
+      setOrderModalData({ ...data, marketOpen: feedInfo.marketOpen });
+    },
+    [feedInfo.marketOpen, user]
   );
   // Toast feedback
   const [toast, setToast] = useState(null);
@@ -188,7 +191,7 @@ export default function App() {
   const tradingToken = useRef(token);
   tradingToken.current = token;
   const syncTradingState = useCallback(async () => {
-    if (tradingSyncRequest.current?.token === token) return;
+    if (!token || tradingSyncRequest.current?.token === token) return;
     const request = { token };
     tradingSyncRequest.current = request;
     try {
@@ -219,6 +222,7 @@ export default function App() {
 
   // Re-sync portfolio & trade history when user logs in or out
   useEffect(() => {
+    setPortfolio({ capital: 1000000, initial_capital: 1000000, realized_pnl: 0, unrealized_pnl: 0, margin_used: 0, available_margin: 1000000 });
     setPositions([]);
     setClosedPositions([]);
     setAllTrades([]);
@@ -233,7 +237,7 @@ export default function App() {
       const res = await getReplayState();
       const data = res.data || {};
       setReplayState(data);
-      if (data.is_active) {
+      if (data.is_replaying || data.is_active) {
         setShowReplayBar(true);
       }
     } catch (e) {
@@ -486,18 +490,7 @@ export default function App() {
       showToast('Portfolio reset to ₹10,00,000', 'success');
       await syncTradingState();
     } catch (err) {
-      // Local fallback reset
-      setPortfolio({
-        capital: 1000000,
-        initial_capital: 1000000,
-        realized_pnl: 0,
-        unrealized_pnl: 0,
-        margin_used: 0,
-        available_margin: 1000000,
-      });
-      setPositions([]);
-      setOrders([]);
-      showToast('Portfolio reset to ₹10,00,000', 'success');
+      showToast(err?.response?.data?.detail || "Portfolio reset failed. No changes confirmed.", "error");
     }
   };
 
@@ -570,7 +563,7 @@ export default function App() {
       />
 
       {/* Replay Docked Bar (when enabled) */}
-      {(showReplayBar || replayState.is_active) && (
+      {(showReplayBar || replayState.is_replaying || replayState.is_active) && (
         <div className="px-4 py-2 bg-[#f4f6fa] border-b border-amber-900/40">
           <ReplayControls
             replayState={replayState}

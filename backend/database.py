@@ -332,6 +332,15 @@ class DebateRecordModel(Base):
     payload: str = Column(Text, nullable=False)
 
 
+class PendingOrderModel(Base):
+    """Durable pending paper orders; removed transactionally when filled or cancelled."""
+
+    __tablename__ = "pending_paper_orders"
+    id: str = Column(String(64), primary_key=True)
+    user_id: int | None = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    payload: str = Column(Text, nullable=False)
+
+
 class AppKVModel(Base):
     """Tiny key/value store (e.g. auto-debate scheduler config so it resumes after restart)."""
 

@@ -626,6 +626,8 @@ class AngelService:
                         last_t = -1
                         for row in raw:
                             dt = datetime.fromisoformat(row[0])
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=IST)
                             t = int(dt.timestamp())
                             if t <= last_t:
                                 continue
@@ -643,7 +645,9 @@ class AngelService:
             except Exception as exc:
                 logger.warning("Replay candles fetch error for %s on %s: %s", sym_norm, date_str, exc)
 
-        # Deterministic simulation of 375 one-minute candles for replay date
+        # Do not label generated prices as real historical data.
+        if self.is_configured() or not settings.ALLOW_SIMULATED_TRADING:
+            return []
         return self._generate_simulated_day_candles(sym_norm, date_str)
 
     def _generate_simulated_day_candles(self, symbol: str, date_str: str) -> list[dict[str, Any]]:
@@ -777,7 +781,9 @@ class AngelService:
         exps = scrip_master.expiries(name)
         if not exps:
             return None
-        iso = expiry if expiry in exps else exps[0]
+        if expiry is not None and expiry not in exps:
+            return None
+        iso = expiry if expiry is not None else exps[0]
         c = scrip_master.contract(name, iso, int(strike), option_type.upper())
         if not c:
             return None
@@ -952,7 +958,7 @@ class AngelService:
         step = spec["strike_step"]
 
         await self.ensure_contracts()
-        lot_size = spec["lot_size"]
+        lot_size = scrip_master.lot_size(sym_norm) or spec["lot_size"]
 
         replaying = override_spot is not None and override_spot > 0
         spot = float(override_spot) if replaying else await self.get_spot_price(sym_norm)
@@ -964,6 +970,8 @@ class AngelService:
                 if exp["date"] == expiry or exp["label"].lower() == expiry.lower():
                     selected_expiry = exp
                     break
+        if expiry and not selected_expiry:
+            raise ValueError("Requested expiry is unavailable.")
         if not selected_expiry and avail_expiries:
             selected_expiry = avail_expiries[0]
 

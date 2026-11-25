@@ -236,14 +236,19 @@ async def get_optional_user(
         payload = jwt.decode(credentials.credentials, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
         sub = payload.get("sub")
         if not sub:
-            return None
+            raise ValueError("Missing subject")
         user_id = int(sub)
     except Exception:
-        return None  # bad / expired token -> treat as guest
+        raise HTTPException(status_code=401, detail="Invalid or expired session.")
 
     try:
         stmt = select(UserModel).where(UserModel.id == user_id)
-        return (await session.execute(stmt)).scalars().first()
+        user = (await session.execute(stmt)).scalars().first()
+        if user is None:
+            raise HTTPException(status_code=401, detail="Account not found.")
+        return user
+    except HTTPException:
+        raise
     except Exception as exc:
         # A database hiccup must NOT silently turn a signed-in user into an empty guest account
         logger.error("get_optional_user DB lookup failed: %s", exc)
