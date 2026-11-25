@@ -31,11 +31,17 @@ import {
   resetPortfolio,
   getReplayState,
   getTradeHistory,
+  exportTradeHistory,
 } from './api';
-import { Activity, Clock, Zap, ChevronDown, ChevronUp, CheckCircle2, AlertTriangle, Info } from 'lucide-react';
+import { Activity, Clock, Zap, ChevronDown, ChevronUp, CheckCircle2, AlertTriangle, Info, MessageSquare, History, Download, FileText } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('terminal'); // 'terminal' | 'oi' | 'pnl'
+  const [terminalTab, setTerminalTab] = useState('trade');
+  const [historyView, setHistoryView] = useState('trades');
+  const [exporting, setExporting] = useState(false);
+  const openTerminal = (tab = 'trade') => { setActiveTab('terminal'); setTerminalTab(tab); };
+  const openDebateHistory = () => { setHistoryView('debates'); openTerminal('history'); };
   const [rightBottomTab, setRightBottomTab] = useState('positions'); // 'positions' | 'orders'
   const [selectedIndex, setSelectedIndex] = useState('NIFTY');
   const [spotPrice, setSpotPrice] = useState(23500);
@@ -408,7 +414,7 @@ export default function App() {
         'success'
       );
       setRightBottomTab(filled?.status === 'PENDING' ? 'orders' : 'positions');
-      setTimeout(() => positionsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
+      setTimeout(() => { if (positionsRef.current?.getClientRects().length) positionsRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 150);
       await syncTradingState();
       return res;
     } catch (err) {
@@ -494,6 +500,23 @@ export default function App() {
     }
   };
 
+  const handleExportHistory = async () => {
+    setExporting(true);
+    try {
+      const res = await exportTradeHistory();
+      const url = URL.createObjectURL(res.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'papertrade-closed-trades.csv';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      showToast('Unable to export trade history.', 'error');
+    } finally { setExporting(false); }
+  };
+
   // Keyboard Shortcuts Listener
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -506,7 +529,7 @@ export default function App() {
       } else if (e.key === '?') {
         setShowShortcuts((prev) => !prev);
       } else if (e.key === '1') {
-        setActiveTab('terminal');
+        openTerminal('trade');
       } else if (e.key === '2') {
         setActiveTab('oi');
       } else if (e.key === '3') {
@@ -550,7 +573,7 @@ export default function App() {
         replayState={replayState}
         feedInfo={feedInfo}
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={(tab) => tab === 'terminal' ? openTerminal('trade') : setActiveTab(tab)}
         onResetPortfolio={handleResetPortfolio}
         onOpenReplay={() => setShowReplayBar(true)}
         onOpenCalculator={() => setShowCalculator(true)}
@@ -579,12 +602,39 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 p-3 lg:p-4 pb-24 md:pb-4 max-w-[1920px] w-full mx-auto">
-        {/* Tab 1: Terminal (Split Option Chain + Chart + Positions) */}
+        {/* Terminal navigation: panels stay mounted to preserve chart and debate state. */}
         {activeTab === 'terminal' && (
-          <WelcomeGuide marketOpen={feedInfo.marketOpen} onOpenDebate={() => setActiveTab('debate')} />
+          <div className="mb-4 bg-white border border-slate-200 rounded-2xl p-2 sm:p-3 shadow-sm">
+            <div className="flex items-center justify-between gap-2 px-2 pb-2">
+              <h1 className="text-base sm:text-lg font-bold text-slate-900">Terminal</h1>
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-cyan-700 bg-cyan-50 rounded-full px-2 py-1">Paper trading</span>
+            </div>
+            <div role="tablist" aria-label="Terminal views" className="grid grid-cols-3 gap-1 bg-[#eef1f6] p-1 rounded-xl" onKeyDown={(event) => {
+              const ids = ['trade', 'chat', 'history'];
+              if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+              event.preventDefault(); event.stopPropagation();
+              const index = ids.indexOf(terminalTab);
+              const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (index + (event.key === 'ArrowRight' ? 1 : 2)) % 3;
+              setTerminalTab(ids[next]); document.getElementById(`terminal-tab-${ids[next]}`)?.focus();
+            }}>
+              {[
+                { id: 'trade', label: 'Option Buy/Sell', icon: Activity },
+                { id: 'chat', label: 'Chat', icon: MessageSquare },
+                { id: 'history', label: 'History', icon: History },
+              ].map(({ id, label, icon: Icon }) => (
+                <button key={id} id={`terminal-tab-${id}`} type="button" role="tab" aria-selected={terminalTab === id} aria-controls={`terminal-panel-${id}`} tabIndex={terminalTab === id ? 0 : -1}
+                  onClick={() => setTerminalTab(id)}
+                  className={`min-w-0 flex items-center justify-center gap-1.5 min-h-[44px] px-1.5 sm:px-3 py-2 rounded-lg text-[11px] sm:text-sm font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-cyan-500 ${terminalTab === id ? 'bg-cyan-600 text-white shadow-sm' : 'text-slate-600 hover:bg-white hover:text-cyan-700'}`}>
+                  <Icon size={16} className="shrink-0" /><span>{label}</span>
+                  {id === 'trade' && positions.length > 0 && <span className="hidden sm:inline rounded-full bg-white/20 px-1.5 text-[10px]">{positions.length}</span>}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
-        {activeTab === 'terminal' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 h-auto lg:h-[calc(100vh-135px)] lg:min-h-[660px]">
+        <section id="terminal-panel-trade" role="tabpanel" aria-labelledby="terminal-tab-trade" hidden={activeTab !== 'terminal' || terminalTab !== 'trade'}>
+          <WelcomeGuide marketOpen={feedInfo.marketOpen} onOpenDebate={() => openTerminal('chat')} />
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 h-auto lg:h-[calc(100vh-235px)] lg:min-h-[660px]">
             {/* Left 7 Columns: Complete Option Chain */}
             <div className="lg:col-span-7 h-[540px] sm:h-[620px] lg:h-full flex flex-col min-h-[420px]">
               <OptionChain
@@ -648,7 +698,7 @@ export default function App() {
                     }`}
                   >
                     <Activity size={13} />
-                    <span>Positions ({positions.length > 0 ? `${positions.length} open` : (allTrades.length > 0 ? `${allTrades.length} trades` : '0')})</span>
+                    <span>Positions ({positions.length} open)</span>
                   </button>
 
                   <button
@@ -669,8 +719,7 @@ export default function App() {
                   {rightBottomTab === 'positions' ? (
                     <PositionsPanel
                       positions={positions}
-                      closedPositions={closedPositions}
-                      allTrades={allTrades}
+                      openOnly
                       portfolio={portfolio}
                       onExitPosition={handleExitPosition}
                       onExitAllPositions={handleExitAllPositions}
@@ -706,7 +755,33 @@ export default function App() {
               </div>
             </div>
           </div>
-        )}
+        </section>
+
+        {/* History: trade ledger and the same live-updated debate audit trail. */}
+        <section id="terminal-panel-history" role="tabpanel" aria-labelledby="terminal-tab-history" hidden={activeTab !== 'terminal' || terminalTab !== 'history'} className="max-w-7xl mx-auto space-y-3">
+          <div className="bg-white rounded-xl border border-slate-200 p-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex gap-1 bg-[#eef1f6] rounded-lg p-1">
+              <button aria-pressed={historyView === 'trades'} onClick={() => setHistoryView('trades')} className={`px-3 py-2 rounded-md text-xs font-semibold ${historyView === 'trades' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-600'}`}>Trade History</button>
+              <button aria-pressed={historyView === 'debates'} onClick={() => setHistoryView('debates')} className={`px-3 py-2 rounded-md text-xs font-semibold ${historyView === 'debates' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-600'}`}>Debate History</button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => setShowDailyReportModal(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold"><FileText size={14} /> Daily Report</button>
+              {historyView === 'trades' && <button disabled={!user || exporting} onClick={handleExportHistory} className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-slate-700 text-xs font-semibold disabled:opacity-50"><Download size={14} />{exporting ? 'Exporting...' : 'Export closed trades'}</button>}
+            </div>
+          </div>
+          <div hidden={historyView !== 'trades'} className="h-[650px]">
+            <PositionsPanel key={`history-${user?.id || 'guest'}`} positions={positions} closedPositions={closedPositions} allTrades={allTrades} portfolio={portfolio}
+              historyMode onExitPosition={handleExitPosition} onExitAllPositions={handleExitAllPositions} onUpdateStopLoss={handleUpdateStopLoss} onOpenReport={() => setShowDailyReportModal(true)} />
+          </div>
+          <div id="terminal-debate-history" hidden={historyView !== 'debates'} />
+        </section>
+
+        <section id="terminal-panel-chat" role="tabpanel" aria-labelledby="terminal-tab-chat" hidden={activeTab !== 'terminal' || terminalTab !== 'chat'} className="max-w-7xl mx-auto">
+          <DebateArena key={user?.id || 'guest'} selectedIndex={selectedIndex} onSelectIndex={(idx) => { setSelectedIndex(idx); setSelectedContract(null); }}
+            onExecuteTrade={handleExecuteDebateTrade} onOpenHistory={openDebateHistory} onOpenChat={() => openTerminal('chat')}
+            historyVisible={activeTab === 'terminal' && terminalTab === 'history' && historyView === 'debates'}
+            onTradeChanged={(msg) => { if (msg) showToast(msg, 'success'); syncTradingState(); }} />
+        </section>
 
         {/* Tab 2: OI & Greeks Analysis */}
         {activeTab === 'oi' && (
@@ -730,29 +805,15 @@ export default function App() {
               spotPrice={spotPrice}
               onExecuteSuccess={() => {
                 syncTradingState();
-                setActiveTab('terminal');
+                openTerminal('trade');
               }}
             />
           </div>
         )}
 
-        {/* Tab 5: AI Debate Studio */}
-        {activeTab === 'debate' && (
-          <div className="max-w-7xl mx-auto">
-            <DebateArena
-              selectedIndex={selectedIndex}
-              onSelectIndex={(idx) => setSelectedIndex(idx)}
-              onExecuteTrade={handleExecuteDebateTrade}
-              onTradeChanged={(msg) => {
-                if (msg) showToast(msg, 'success');
-                syncTradingState();
-              }}
-            />
-          </div>
-        )}
       </main>
 
-      <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} positionsCount={positions.length} />
+      <BottomNav activeTab={activeTab} setActiveTab={(tab) => tab === 'terminal' ? openTerminal('trade') : setActiveTab(tab)} positionsCount={positions.length} />
 
       {/* Instant 1-Click Order Modal */}
       {orderModalData && (

@@ -114,6 +114,7 @@ export const updateStopLoss = (id, slPrice) =>
 export const resetPortfolio = () => api.post('/trading/reset');
 
 export const getTradeHistory = () => api.get('/trading/history');
+export const exportTradeHistory = () => api.get('/trading/export', { responseType: 'blob' });
 
 export const getAllTrades = () => api.get('/trading/all-trades');
 

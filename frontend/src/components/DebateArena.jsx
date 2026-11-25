@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import {
   Brain,
@@ -218,13 +219,19 @@ export default function DebateArena({
   onSelectIndex = () => {},
   onExecuteTrade = null,
   onTradeChanged = () => {},
+  onOpenHistory = () => {},
+  onOpenChat = () => {},
+  historyVisible = false,
 }) {
   const { isAuthenticated } = useAuth();
   const [currentSymbol, setCurrentSymbol] = useState(selectedIndex || 'NIFTY');
-  const [debate, setDebate] = useState(null);
+  const [latestDebate, setDebate] = useState(null);
+  const [archivedDebate, setArchivedDebate] = useState(null);
+  const debate = archivedDebate || latestDebate;
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState([]);
-  const [showHistory, setShowHistory] = useState(false);
+  const [historyError, setHistoryError] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
 
@@ -238,45 +245,55 @@ export default function DebateArena({
   const [schedulerLoading, setSchedulerLoading] = useState(false);
 
   const lastSessionRef = useRef(undefined);
+  const latestRequestRef = useRef(0);
+  const historyBusyRef = useRef(false);
+  const symbolRef = useRef(currentSymbol);
+  symbolRef.current = currentSymbol;
   const [marketHoursOnly, setMarketHoursOnly] = useState(true);
   const [schedulerInfo, setSchedulerInfo] = useState({});
 
   // Sync internal symbol if parent prop changes
   useEffect(() => {
     if (selectedIndex && selectedIndex !== currentSymbol) {
+      setArchivedDebate(null);
       setCurrentSymbol(selectedIndex);
     }
   }, [selectedIndex]);
 
   // Load latest debate on mount or symbol change
   const fetchLatest = useCallback(async (sym) => {
+    if (sym !== symbolRef.current) return;
+    const request = ++latestRequestRef.current;
     try {
       setLoading(true);
       setErrorMsg(null);
       const res = await getLatestDebate(sym);
-      if (res.data) {
-        setDebate(res.data);
-      }
+      if (request === latestRequestRef.current && sym === symbolRef.current) setDebate(res.data || null);
     } catch (err) {
       console.warn('No active debate found:', err);
     } finally {
-      setLoading(false);
+      if (request === latestRequestRef.current) setLoading(false);
     }
   }, []);
 
   const fetchHistoryList = useCallback(async () => {
+    if (historyBusyRef.current) return;
+    historyBusyRef.current = true;
+    setHistoryLoading(true);
     try {
-      const res = await getDebateHistory(20);
+      const res = await getDebateHistory(100);
+      setHistoryError(null);
       if (Array.isArray(res.data)) {
         setHistory(res.data);
       }
     } catch (err) {
+      setHistoryError('Unable to load debate history. Please retry.');
       console.warn('Failed to fetch debate history:', err);
-    }
+    } finally { historyBusyRef.current = false; setHistoryLoading(false); }
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated) setDebate(null);
+    setDebate(null);
     fetchLatest(currentSymbol);
     fetchHistoryList();
   }, [currentSymbol, fetchLatest, fetchHistoryList, isAuthenticated]);
@@ -330,12 +347,14 @@ export default function DebateArena({
     return () => clearInterval(pollInterval);
   }, [schedulerRunning, checkSchedulerStatus]);
 
+  useEffect(() => { if (historyVisible) fetchHistoryList(); }, [historyVisible, fetchHistoryList]);
+
   // Keep history/outcomes fresh while the scheduler is on or the history panel is open
   useEffect(() => {
-    if (!schedulerRunning && !showHistory) return;
+    if (!schedulerRunning && !historyVisible) return;
     const t = setInterval(fetchHistoryList, 10000);
     return () => clearInterval(t);
-  }, [schedulerRunning, showHistory, fetchHistoryList]);
+  }, [schedulerRunning, historyVisible, fetchHistoryList]);
 
   // 1-second Countdown Ticker
   useEffect(() => {
@@ -449,25 +468,28 @@ export default function DebateArena({
 
   // Trigger Live AI Debate
   const handleTriggerDebate = async () => {
+    setArchivedDebate(null);
+    const request = ++latestRequestRef.current;
+    const symbol = currentSymbol;
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await runDebate(currentSymbol);
+      const res = await runDebate(symbol);
       if (res.data) {
-        setDebate(res.data);
+        if (request === latestRequestRef.current && symbol === symbolRef.current) setDebate(res.data);
         await fetchHistoryList();
       }
     } catch (err) {
       const msg = err?.response?.data?.detail || err.message || 'Failed to trigger debate';
-      setErrorMsg(msg);
+      if (request === latestRequestRef.current) setErrorMsg(msg);
     } finally {
-      setLoading(false);
+      if (request === latestRequestRef.current) setLoading(false);
     }
   };
 
   // 1-Click Judge Trade Execution
   const handleExecuteJudge = async () => {
-    if (!debate) return;
+    if (!debate || archivedDebate || debate.symbol !== currentSymbol) return;
     setExecuting(true);
     setErrorMsg(null);
     try {
@@ -493,7 +515,7 @@ export default function DebateArena({
 
   // Backing quick trade for Bull or Bear
   const handleBackThesis = async (optionType, strikeVal) => {
-    if (!onExecuteTrade) return;
+    if (!onExecuteTrade || archivedDebate || debate?.symbol !== currentSymbol) return;
     const strikeNum = Number(strikeVal) || (currentSymbol === 'BANKNIFTY' ? 52000 : 24500);
     const entryP = optionType === 'CE' ? 125 : 120;
     const slP = entryP - 25;
@@ -521,8 +543,9 @@ export default function DebateArena({
   const bear = debate?.bear || {};
   const judge = debate?.judge || {};
   const snapshot = debate?.market_snapshot;
-  const isBank = currentSymbol === 'BANKNIFTY';
-  const lotSize = isBank ? 30 : currentSymbol === 'SENSEX' ? 20 : 65;
+  const displayedSymbol = debate?.symbol || currentSymbol;
+  const isBank = displayedSymbol === 'BANKNIFTY';
+  const lotSize = isBank ? 30 : displayedSymbol === 'SENSEX' ? 20 : 65;
 
   const judgeVerdict = (judge.verdict || 'NO_TRADE').toUpperCase();
   const isBuyCE = judgeVerdict.includes('CE');
@@ -695,6 +718,7 @@ export default function DebateArena({
           <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl p-1 text-xs">
             <button
               onClick={() => {
+                setArchivedDebate(null);
                 setCurrentSymbol('NIFTY');
                 onSelectIndex('NIFTY');
               }}
@@ -708,6 +732,7 @@ export default function DebateArena({
             </button>
             <button
               onClick={() => {
+                setArchivedDebate(null);
                 setCurrentSymbol('BANKNIFTY');
                 onSelectIndex('BANKNIFTY');
               }}
@@ -723,7 +748,7 @@ export default function DebateArena({
 
           {/* History Button */}
           <button
-            onClick={() => setShowHistory((prev) => !prev)}
+            onClick={onOpenHistory}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-ink text-xs font-semibold transition-colors"
             title="Debate history"
           >
@@ -752,7 +777,7 @@ export default function DebateArena({
       )}
 
       {/* History Drawer / Panel */}
-      {showHistory && (
+      {historyVisible && document.getElementById('terminal-debate-history') && createPortal(
         <div className="bg-[#ffffff]/95 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
           <div className="flex items-center justify-between border-b border-slate-800 pb-2">
             <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
@@ -760,14 +785,15 @@ export default function DebateArena({
               <span>Debate Audit Trail</span>
             </h3>
             <button
-              onClick={() => setShowHistory(false)}
+              onClick={fetchHistoryList}
               className="text-xs text-slate-400 hover:text-ink"
             >
-              Close
+              Refresh
             </button>
           </div>
 
-          {history.length === 0 ? (
+          {historyError && <p role="alert" className="text-sm text-rose-600">{historyError}</p>}
+          {historyLoading && history.length === 0 ? <p className="text-sm text-slate-500">Loading debates…</p> : history.length === 0 ? (
             <p className="text-xs text-slate-500 py-3 text-center">
               {isAuthenticated
                 ? 'No past debates recorded yet.'
@@ -779,14 +805,14 @@ export default function DebateArena({
                 const isCE = sess.judge?.verdict?.includes('CE');
                 const isPE = sess.judge?.verdict?.includes('PE');
                 return (
-                  <div
+                  <button
+                    type="button"
                     key={sess.id}
                     onClick={() => {
-                      setDebate(sess);
-                      setCurrentSymbol(sess.symbol);
-                      setShowHistory(false);
+                      setArchivedDebate(sess);
+                      onOpenChat();
                     }}
-                    className="p-3 bg-slate-950/80 hover:bg-slate-900 border border-slate-800 hover:border-cyan-500/50 rounded-xl cursor-pointer transition-all space-y-1.5 text-xs"
+                    className="p-3 bg-slate-950/80 hover:bg-slate-900 border border-slate-800 hover:border-cyan-500/50 rounded-xl cursor-pointer transition-all space-y-1.5 text-xs text-left w-full"
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-mono font-bold text-slate-200">{sess.symbol}</span>
@@ -807,14 +833,14 @@ export default function DebateArena({
                       <span>{sess.timestamp}</span>
                     </div>
                     <OutcomeBadge sess={sess} />
-                  </div>
+                  </button>
                 );
               })}
             </div>
           )}
-        </div>
-      )}
+        </div>, document.getElementById('terminal-debate-history'))}
 
+      {archivedDebate && <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-xs"><span>Viewing archived debate · {archivedDebate.symbol} · {archivedDebate.timestamp} (read-only)</span><button className="font-bold underline" onClick={() => setArchivedDebate(null)}>Return to latest</button></div>}
       {/* Main Debate Display */}
       {loading && !debate ? (
         <div className="flex flex-col items-center justify-center py-24 space-y-3 bg-[#ffffff]/60 rounded-2xl border border-slate-800/80">
@@ -879,7 +905,7 @@ export default function DebateArena({
                         {bull.strike ? `${Math.round(bull.strike)} CE` : 'ATM CE'}
                       </div>
                     </div>
-                    {onExecuteTrade && (
+                    {onExecuteTrade && !archivedDebate && (
                       <button
                         onClick={() => handleBackThesis('CE', bull.strike)}
                         className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors"
@@ -950,7 +976,7 @@ export default function DebateArena({
                         {bear.strike ? `${Math.round(bear.strike)} PE` : 'ATM PE'}
                       </div>
                     </div>
-                    {onExecuteTrade && (
+                    {onExecuteTrade && !archivedDebate && (
                       <button
                         onClick={() => handleBackThesis('PE', bear.strike)}
                         className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition-colors"
@@ -1064,16 +1090,16 @@ export default function DebateArena({
                       {/* 1-Click Execution Button */}
                       <button
                         onClick={handleExecuteJudge}
-                        disabled={executing || debate.executed}
+                        disabled={executing || debate.executed || Boolean(archivedDebate) || debate.symbol !== currentSymbol}
                         className={`w-full mt-2 py-3 px-4 rounded-xl font-black text-xs flex items-center justify-center gap-2 shadow-lg transition-all ${
-                          debate.executed
+                          (debate.executed || archivedDebate)
                             ? 'bg-slate-800 text-slate-400 cursor-not-allowed border border-slate-700'
                             : 'bg-gradient-to-r from-amber-500 hover:from-amber-400 to-yellow-500 hover:to-yellow-400 text-slate-950 shadow-amber-900/40 hover:scale-[1.01]'
                         }`}
                       >
                         <Zap size={15} />
                         <span>
-                          {debate.executed
+                          {archivedDebate ? 'Archived verdict (read-only)' : debate.executed
                             ? '✓ Judge Trade Executed'
                             : executing
                             ? 'Placing Order...'

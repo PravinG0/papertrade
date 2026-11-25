@@ -1,10 +1,9 @@
 import React from 'react';
-import { Activity, Layers, Calendar, Brain, LineChart } from 'lucide-react';
+import { Activity, Layers, Calendar, LineChart } from 'lucide-react';
 
 const ITEMS = [
-  { id: 'terminal', label: 'Trade', icon: Activity },
+  { id: 'terminal', label: 'Terminal', icon: Activity },
   { id: 'oi', label: 'Analysis', icon: Layers },
-  { id: 'debate', label: 'AI Debate', icon: Brain },
   { id: 'pnl', label: 'Journal', icon: Calendar },
   { id: 'payoff', label: 'Strategy', icon: LineChart },
 ];
@@ -17,7 +16,7 @@ export default function BottomNav({ activeTab, setActiveTab, positionsCount = 0 
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       aria-label="Main navigation"
     >
-      <ul className="grid grid-cols-5">
+      <ul className="grid grid-cols-4">
         {ITEMS.map(({ id, label, icon: Icon }) => {
           const active = activeTab === id;
           return (

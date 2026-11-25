@@ -29,9 +29,13 @@ export default function PositionsPanel({
   onExitAllPositions = () => {},
   onUpdateStopLoss = () => {},
   onOpenReport = () => {},
+  openOnly = false,
+  historyMode = false,
 }) {
   const [activeFilter, setActiveFilter] = useState('ALL'); // 'ALL' | 'OPEN' | 'TARGET_HIT' | 'STOP_LOSS_HIT' | 'CLOSED'
   const [searchQuery, setSearchQuery] = useState('');
+  const [dateFilter, setDateFilter] = useState('');
+  const [indexFilter, setIndexFilter] = useState('');
   const [editingSl, setEditingSl] = useState({});
   const [savingSl, setSavingSl] = useState({});
   const [exitingId, setExitingId] = useState(null);
@@ -80,7 +84,7 @@ export default function PositionsPanel({
     });
 
     // 2. Process closed positions
-    const rawClosed = allTrades.length > 0
+    const rawClosed = openOnly ? [] : allTrades.length > 0
       ? allTrades.filter((t) => t.status !== 'ACTIVE' && t.status !== 'OPEN' && !seenIds.has(t.id || t.pos_id))
       : closedPositions;
 
@@ -127,7 +131,7 @@ export default function PositionsPanel({
     });
 
     return list;
-  }, [positions, closedPositions, allTrades]);
+  }, [positions, closedPositions, allTrades, openOnly]);
 
   // Counts for tabs
   const counts = useMemo(() => {
@@ -143,6 +147,8 @@ export default function PositionsPanel({
   // Filtered trades by tab and search
   const filteredTrades = useMemo(() => {
     return unifiedTrades.filter((t) => {
+      if (dateFilter && String(t.entry_time || t.created_at || "").slice(0, 10) !== dateFilter) return false;
+      if (indexFilter && (t.underlying || "").toUpperCase() !== indexFilter) return false;
       // Tab filter
       if (activeFilter === 'OPEN' && t.trade_status !== 'OPEN') return false;
       if (activeFilter === 'TARGET_HIT' && t.trade_status !== 'TARGET_HIT') return false;
@@ -161,7 +167,7 @@ export default function PositionsPanel({
 
       return true;
     });
-  }, [unifiedTrades, activeFilter, searchQuery]);
+  }, [unifiedTrades, activeFilter, searchQuery, dateFilter, indexFilter]);
 
   const unrealizedPnl = portfolio?.unrealized_pnl ?? positions.reduce((acc, p) => acc + (p.pnl || p.unrealized_pnl || 0), 0);
   const realizedPnl = portfolio?.realized_pnl ?? closedPositions.reduce((acc, p) => acc + (p.realized_pnl || 0), 0);
@@ -245,7 +251,7 @@ export default function PositionsPanel({
         <div className="flex items-center gap-2">
           <Activity size={16} className="text-cyan-500" />
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
-            <span>Terminal Positions &amp; Executed Trades</span>
+            <span>{openOnly ? 'Open Positions' : historyMode ? 'Executed Trade History' : 'Terminal Positions & Executed Trades'}</span>
             <span className="px-1.5 py-0.2 rounded bg-cyan-100 text-cyan-800 text-[10px] font-mono">
               {unifiedTrades.length}
             </span>
@@ -281,7 +287,7 @@ export default function PositionsPanel({
       {/* Filter Tabs & Quick Search Ribbon */}
       <div className="px-3 py-1.5 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
         {/* Status Filter Buttons */}
-        <div className="flex items-center gap-1 overflow-x-auto scrollbar-none">
+        {!openOnly && <div className="flex items-center gap-1 overflow-x-auto scrollbar-none">
           <button
             onClick={() => setActiveFilter('ALL')}
             className={`px-2.5 py-1 rounded-md font-medium text-[11px] flex items-center gap-1 transition-all ${
@@ -355,7 +361,12 @@ export default function PositionsPanel({
               {counts.CLOSED}
             </span>
           </button>
-        </div>
+        </div>}
+        {historyMode && <div className="flex flex-wrap gap-2 items-center">
+          <label className="text-[11px] text-slate-300 flex items-center gap-1">Entry date <input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className="bg-slate-800 border border-slate-700 text-slate-200 rounded px-1 py-0.5" /></label>
+          <label className="text-[11px] text-slate-300 flex items-center gap-1">Index <select value={indexFilter} onChange={(e) => setIndexFilter(e.target.value)} className="bg-slate-800 border border-slate-700 text-slate-200 rounded px-1 py-0.5"><option value="">All</option>{[...new Set(unifiedTrades.map((t) => t.underlying).filter(Boolean))].sort().map((idx) => <option key={idx}>{idx}</option>)}</select></label>
+          {(dateFilter || indexFilter) && <button onClick={() => { setDateFilter(''); setIndexFilter(''); }} className="text-cyan-400 text-xs">Clear filters</button>}
+        </div>}
 
         {/* Quick Search Box */}
         <div className="relative flex items-center">
@@ -395,7 +406,7 @@ export default function PositionsPanel({
                   <Activity size={24} className="mx-auto mb-2 text-slate-600" />
                   <p className="font-semibold text-slate-300">No trades matching filter</p>
                   <p className="text-xs text-slate-500 mt-1">
-                    {activeFilter === 'OPEN'
+                    {(openOnly || activeFilter === 'OPEN')
                       ? 'No open positions currently active. Tap BUY on the option chain to execute a trade.'
                       : activeFilter === 'TARGET_HIT'
                       ? 'No target hit trades recorded yet today.'

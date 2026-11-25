@@ -18,7 +18,6 @@ import {
   LogIn,
   LogOut,
   ChevronDown,
-  Brain,
 } from 'lucide-react';
 import sound from '../utils/audio';
 import { useAuth } from '../context/AuthContext';
@@ -381,20 +380,6 @@ export default function Header({
             <span>Strategy Payoff</span>
           </button>
 
-          <button
-            onClick={() => setActiveTab('debate')}
-            className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all ${
-              activeTab === 'debate'
-                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-900/40'
-                : 'text-purple-400 hover:text-purple-200 hover:bg-purple-950/40'
-            }`}
-          >
-            <Brain size={14} className={activeTab === 'debate' ? 'text-ink' : 'text-purple-400'} />
-            <span className="font-bold">AI Debate Studio</span>
-            <span className="text-[9px] font-mono font-bold px-1 py-0.2 rounded bg-purple-900/80 text-purple-200">
-              3-Agent
-            </span>
-          </button>
         </div>
 
         {/* Mobile / Compact Mode Replay Toggle */}
