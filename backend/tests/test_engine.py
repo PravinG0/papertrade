@@ -157,7 +157,7 @@ async def test_paper_engine_lifecycle():
         "lots": 1,
         "price": 100.0,
         "current_ltp": 100.0,
-    })
+    }, enforce_hours=False)
     assert res.get("status") in ["SUCCESS", "EXECUTED"] or res.get("order_id")
 
     # Verify state has position
@@ -262,7 +262,7 @@ async def test_daily_report_agent_generation():
         "current_ltp": 100.0,
         "stop_loss": 80.0,
         "target": 140.0,
-    })
+    }, enforce_hours=False)
     tgt_pos_id = tgt_trade["position_id"]
     await engine.exit_position(tgt_pos_id, exit_price=140.0, reason="TARGET_HIT")
 
@@ -279,7 +279,7 @@ async def test_daily_report_agent_generation():
         "current_ltp": 120.0,
         "stop_loss": 95.0,
         "target": 160.0,
-    })
+    }, enforce_hours=False)
     sl_pos_id = sl_trade["position_id"]
     await engine.exit_position(sl_pos_id, exit_price=95.0, reason="STOP_LOSS_HIT")
 
@@ -296,7 +296,7 @@ async def test_daily_report_agent_generation():
         "current_ltp": 85.0,
         "stop_loss": 65.0,
         "target": 125.0,
-    })
+    }, enforce_hours=False)
 
     # Generate daily report
     report = await report_agent.generate_daily_report(date_str=today)
