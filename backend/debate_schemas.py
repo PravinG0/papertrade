@@ -45,6 +45,7 @@ class MarketSnapshot(BaseModel):
     day_high: Optional[float] = None
     day_low: Optional[float] = None
     day_open: Optional[float] = None
+    session_reference: str = "UNKNOWN"  # VWAP, TYPICAL_PRICE_PROXY, or UNKNOWN
     max_pain: Optional[float] = None
     call_oi_wall: Optional[float] = None
     put_oi_wall: Optional[float] = None
@@ -166,6 +167,7 @@ class DebateSession(BaseModel):
     position_id: Optional[str] = Field(default=None, description="Paper position ID created by the execution")
     user_id: Optional[int] = Field(default=None, description="Account the trade was executed in")
     auto_executed: bool = Field(default=False, description="True when the scheduler executed it")
+    episodic_memory: Optional[str] = None
     skip_reason: Optional[str] = Field(default=None, description="Why a BUY verdict was not executed")
     exec_entry_price: Optional[float] = Field(default=None, description="Live option price actually filled")
     exec_symbol: Optional[str] = Field(default=None, description="Exchange trading symbol of the traded option")

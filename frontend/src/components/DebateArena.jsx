@@ -866,6 +866,20 @@ export default function DebateArena({
           {/* Market Matrix Strip */}
           <MarketMatrixBar snapshot={snapshot} />
 
+          {debate.episodic_memory && (
+            <details className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 sm:p-4 text-slate-800 shadow-sm">
+              <summary className="cursor-pointer select-none text-sm font-bold text-slate-900">Adaptive learning memory · Context for all three agents</summary>
+              <p className="mt-2 text-xs text-slate-600">Historical paper-trade evidence, not a prediction. Report explanations may be wrong. This is the saved context supplied to Gemini prompts; numerical fallback agents do not use the report text.</p>
+              <pre className="mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-relaxed font-sans">{debate.episodic_memory}</pre>
+            </details>
+          )}
+          {(debate.skip_reason || judge.risk_warning) && (
+            <div role="status" className="min-w-0 break-words rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+              <strong>Risk / execution notice: </strong>{debate.skip_reason || judge.risk_warning}
+            </div>
+          )}
+
+
           {/* Conviction Tug-of-War Bar */}
           <ConvictionTugOfWar
             bullScore={bull.confidence || 0}

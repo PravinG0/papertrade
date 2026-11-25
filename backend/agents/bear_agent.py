@@ -17,6 +17,7 @@ from google import genai
 from google.genai import types as genai_types
 
 from config import settings
+from adaptive_memory import prompt_with_memory
 from debate_schemas import BearAgentOutput, MarketSnapshot
 
 logger = logging.getLogger("bear_agent")
@@ -78,9 +79,10 @@ class BearAgent:
             except Exception as exc:
                 logger.warning("Could not initialize Gemini Client for BearAgent: %s", exc)
 
-    async def analyze(self, snapshot: MarketSnapshot) -> BearAgentOutput:
+    async def analyze(self, snapshot: MarketSnapshot, memory: str = "") -> BearAgentOutput:
         """Run bear analysis and return structured BearAgentOutput."""
         user_prompt = self._build_prompt(snapshot)
+        user_prompt += f"\nSession open: {snapshot.day_open}; session price reference: {snapshot.session_reference}. If not VWAP, do not call it true VWAP."
 
         models_to_try = [
             settings.GEMINI_MODEL,
@@ -99,7 +101,7 @@ class BearAgent:
                             model=model_name,
                             contents=user_prompt,
                             config=genai_types.GenerateContentConfig(
-                                system_instruction=_BEAR_SYSTEM_PROMPT,
+                                system_instruction=prompt_with_memory(_BEAR_SYSTEM_PROMPT, memory),
                                 response_mime_type="application/json",
                                 temperature=0.2,
                             ),

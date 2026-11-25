@@ -332,6 +332,18 @@ class DebateRecordModel(Base):
     payload: str = Column(Text, nullable=False)
 
 
+class AITradeEvidenceModel(Base):
+    """Atomic AI fill provenance; one successful position per debate."""
+    __tablename__ = "ai_trade_evidence"
+    debate_id: str = Column(String(64), primary_key=True)
+    position_id: str = Column(String(64), ForeignKey("paper_trades.id", ondelete="CASCADE"), nullable=False, unique=True)
+    user_id: int = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    auto_executed: int = Column(Integer, nullable=False, default=0)
+    snapshot: str = Column(Text, nullable=False, default="{}")
+    confidence: int = Column(Integer, nullable=False, default=0)
+    created_at: str = Column(String(32), nullable=False, default=ist_now_str)
+
+
 class PendingOrderModel(Base):
     """Durable pending paper orders; removed transactionally when filled or cancelled."""
 

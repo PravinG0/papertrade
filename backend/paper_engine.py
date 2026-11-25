@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import INDEX_CONFIG, get_index_spec, normalize_index_symbol, settings
-from database import PaperTradeModel, PortfolioModel, PendingOrderModel, AppKVModel, async_session_factory
+from database import PaperTradeModel, PortfolioModel, PendingOrderModel, AppKVModel, AITradeEvidenceModel, async_session_factory
 from wallet_accounting import wallet_accounting
 
 logger = logging.getLogger("paper_engine")
@@ -321,6 +321,7 @@ class PaperEngine:
         order_req: dict[str, Any],
         user_id: Optional[int] = None,
         enforce_hours: bool = True,
+        *, ai_evidence: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Place a paper trade order (Market, Limit, SL) linked to user."""
         if (
@@ -411,7 +412,7 @@ class PaperEngine:
                     order_record["reject_reason"] = f"Insufficient margin. Required: ₹{required_margin:.2f}, Available: ₹{cash_balance:.2f}"
                     return order_record
 
-                return await self._execute_fill(order_record, fill_price, now_time, user_id=uid)
+                return await self._execute_fill(order_record, fill_price, now_time, user_id=uid, ai_evidence=ai_evidence)
             else:
                 # Add to active pending orders
                 async with async_session_factory() as session:
@@ -427,6 +428,7 @@ class PaperEngine:
         fill_price: float,
         fill_time: str,
         user_id: Optional[int] = None,
+        *, ai_evidence: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Internal helper to fill order, update wallet in DB, and create persistent active trade."""
         uid = user_id if user_id is not None else order.get("user_id")
@@ -479,6 +481,22 @@ class PaperEngine:
 
         # Update wallet cash & used margin in SQLite DB
         async with async_session_factory() as session:
+            if ai_evidence:
+                from adaptive_store import guard_auto_fill
+                from adaptive_memory import trend_rejection
+                reason = None
+                if uid is None:
+                    reason = "AI fills require a signed-in account."
+                elif await session.get(AITradeEvidenceModel, ai_evidence["debate_id"]):
+                    reason = "This debate verdict already has a durable fill."
+                elif ai_evidence.get("auto_executed"):
+                    if not self.entry_window_open():
+                        return {**order, "status": "REJECTED", "reject_reason": "Market entry window closed before fill."}
+                    reason = trend_rejection(ai_evidence["snapshot"], order["option_type"], settings.AUTO_TREND_THRESHOLD_PCT)
+                    if not reason:
+                        reason = await guard_auto_fill(session, uid, order)
+                if reason:
+                    return {**order, "status": "REJECTED", "reject_reason": reason}
             port = await self._get_or_create_portfolio(session, uid)
             # BUY pays the premium; SELL blocks the same amount as margin. Both are released on
             # exit together with the realised P&L, so the wallet always reconciles.
@@ -519,6 +537,14 @@ class PaperEngine:
                 created_at=fill_time,
             )
             session.add(db_trade)
+            if ai_evidence:
+                await session.flush()
+                session.add(AITradeEvidenceModel(
+                    debate_id=ai_evidence["debate_id"], position_id=pos_id, user_id=uid,
+                    auto_executed=int(bool(ai_evidence.get("auto_executed"))),
+                    snapshot=json.dumps(ai_evidence["snapshot"]), confidence=ai_evidence["confidence"],
+                    created_at=fill_time,
+                ))
             await session.commit()
 
         self.active_positions[pos_id] = position

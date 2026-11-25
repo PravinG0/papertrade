@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = Field(default="")
     GEMINI_MODEL: str = Field(default="gemini-3.8-flash")
 
+    # Adaptive paper-trading memory and hard risk rules
+    MEMORY_SHORT_DAYS: int = Field(default=5, ge=1, le=30)
+    MEMORY_LONG_DAYS: int = Field(default=30, ge=5, le=90)
+    AUTO_MAX_DAILY_TRADES: int = Field(default=5, ge=1, le=100)
+    AUTO_REPEAT_STRIKE_COOLDOWN_MINUTES: int = Field(default=30, ge=1, le=1440)
+    AUTO_TREND_THRESHOLD_PCT: float = Field(default=0.75, gt=0, le=10)
+
     # ── Keep-Alive / Render Self-Ping Configuration ────────────────────────
     RENDER_EXTERNAL_URL: str = Field(default="")
     KEEP_ALIVE_INTERVAL_SECONDS: int = Field(default=600)  # 10 minutes (prevents Render 15-min idle sleep)

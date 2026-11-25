@@ -148,7 +148,7 @@ class ReportAgent:
         # 2. Query associated AI debate sessions from DB
         debates_by_pos_or_order: dict[str, dict[str, Any]] = {}
         async with async_session_factory() as session:
-            stmt = select(DebateRecordModel).order_by(DebateRecordModel.created_at.desc())
+            stmt = select(DebateRecordModel).where(DebateRecordModel.user_id == user_id).order_by(DebateRecordModel.created_at.desc())
             db_debates = (await session.execute(stmt)).scalars().all()
             for d in db_debates:
                 try:

@@ -21,6 +21,7 @@ from google import genai
 from google.genai import types as genai_types
 
 from config import compute_clamped_sl_target, settings
+from adaptive_memory import prompt_with_memory
 from debate_schemas import (
     BearAgentOutput,
     BullAgentOutput,
@@ -82,9 +83,11 @@ class JudgeAgent:
         snapshot: MarketSnapshot,
         bull: BullAgentOutput,
         bear: BearAgentOutput,
+        memory: str = "",
     ) -> JudgeAgentOutput:
         """Arbitrate between Bull and Bear, applying institutional risk guardrails."""
         user_prompt = self._build_prompt(snapshot, bull, bear)
+        user_prompt += f"\nSession open: {snapshot.day_open}; session price reference: {snapshot.session_reference}. If not VWAP, do not call it true VWAP."
 
         models_to_try = [
             settings.GEMINI_MODEL,
@@ -103,7 +106,7 @@ class JudgeAgent:
                             model=model_name,
                             contents=user_prompt,
                             config=genai_types.GenerateContentConfig(
-                                system_instruction=_JUDGE_SYSTEM_PROMPT,
+                                system_instruction=prompt_with_memory(_JUDGE_SYSTEM_PROMPT, memory),
                                 response_mime_type="application/json",
                                 temperature=0.2,
                             ),

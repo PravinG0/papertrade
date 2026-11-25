@@ -1,8 +1,9 @@
 # TradeLab / PaperTrade — AI developer handoff
 
-**Revision:** Mobile responsiveness update, 25 November 2026.  
-**Base:** `papertrade_wallet_history_fixed.zip` (includes earlier audit, terminal navigation, wallet and history fixes).  
-**Current scope:** Frontend layout and developer documentation only. Backend source, database schema, API contracts and trading rules are unchanged in this revision.
+**Current revision:** Dynamic Daily Learning & Memory Loop, 25 November 2026.  
+**Base:** user-uploaded `papertrade(2).zip`, retaining prior mobile, wallet, history and terminal work.  
+**Current scope:** backend adaptive learning, deterministic automatic-fill guardrails, additive database evidence table, Chat audit UI, regression tests and documentation.  
+**Read first:** [ADAPTIVE_LEARNING_CHANGES.md](ADAPTIVE_LEARNING_CHANGES.md) for the current implementation, configuration, changed files, deployment, test results and limitations. Merged and verified on 25 November 2026: 37/37 pytest suite passing, 3/3 Node frontend tests passing, Vite production build passing. Fixed missing `prompt_with_memory` import in `backend/agents/judge_agent.py`. The historical sections below describe earlier work and may be superseded by the new revision.
 
 ## 1. Project overview
 
@@ -33,7 +34,7 @@ Market flow: Angel One REST polling → FastAPI backend → browser REST and Web
 
 Key API routes: `/api/status`, `/api/indices`, `/api/candles`, `/api/expiries`, `/api/option-chain`, `/api/trading/state`, `/api/trading/order`, `/api/trading/reset`, `/api/trading/history`, `/api/trading/all-trades`, `/api/trading/export`, `/api/debate/run`, `/api/debate/latest`, `/api/debate/history`, `/api/debate/{debate_id}/execute`, `/api/scheduler/start`, `/api/scheduler/stop`, `/api/scheduler/status`, `/api/reports/daily`. Read the actual endpoint definitions before changing payloads.
 
-## 2. Latest changes — mobile and tablet responsiveness
+## 2. Previous changes — mobile and tablet responsiveness
 
 The existing desktop table and trading logic are retained. Mobile presentation uses the same data and event handlers, not a second trading engine or duplicate table.
 
@@ -115,7 +116,7 @@ Test at 320×568, 360×800, 390×844, 430×932, 768×1024, 1024×768 and desktop
 - Direct Angel One WebSocket streaming has not been implemented. Scheduler remains global; replay market display is shared and crash recovery needs hardening.
 - Paper fills are LTP-based, not actual bid/ask, liquidity, margin rules or exchange fills. Holiday calendar and statutory fees require separate verification. AI reports are inferred.
 - Existing data mismatch requires deployed DB audit; don't change historical wallet values based on a screenshot.
-- Manual/AI trade provenance, filtered CSV export and debate date filters remain possible enhancements, not completed features.
+- New AI fills have durable provenance in `ai_trade_evidence` (see adaptive revision); a complete legacy/manual source backfill, source filter, filtered CSV export and debate date filters remain possible enhancements.
 - Bundle size warning remains; mobile cards may be tall for large histories. Consider pagination/virtualization after browser verification, preserving exports and filter totals.
 - Source-only package excludes real secrets, local database, private sessions, Git metadata, node_modules, dist and caches. Keep these separately.
 - When another AI modifies this project: read this file and the exact source, keep previous regression fixes, avoid rewriting unrelated logic, update this handoff and report tests actually executed.

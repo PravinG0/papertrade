@@ -36,6 +36,8 @@ from paper_engine import paper_engine
 from database import DebateRecordModel, PaperTradeModel, async_session_factory
 from sqlalchemy import select
 from config import compute_clamped_sl_target
+from adaptive_memory import session_price_reference, trend_rejection
+from adaptive_store import retrieve_memory
 
 logger = logging.getLogger("debate_engine")
 IST = ZoneInfo("Asia/Kolkata")
@@ -296,9 +298,12 @@ class DebateEngine:
         candles = await angel_service.get_candles(sym, interval="5m", range_period="5d")
         if not candles:
             raise ValueError(f"Historical candle data for {sym} is unavailable; debate skipped.")
-        if candles and len(candles) > 60:
-            candles = candles[-60:]
-        tech = _calc_indicators(candles, spot)
+        now = datetime.now(IST)
+        opening, session_vwap, reference = session_price_reference(candles, now)
+        # Use the broker's actual day-open if the opening candle was unavailable.
+        if opening is None and selected.get("open") and float(selected["open"]) != spot:
+            opening = float(selected["open"])
+        tech = _calc_indicators(candles[-60:], spot)
 
         # 3. Option chain feed
         pcr = 1.05
@@ -338,7 +343,8 @@ class DebateEngine:
             spot_price=round(spot, 2),
             ema_20=tech["ema_20"],
             ema_50=tech["ema_50"],
-            vwap=tech["vwap"],
+            vwap=round(session_vwap, 2) if session_vwap is not None else tech["vwap"],
+            session_reference=reference,
             rsi=tech["rsi"],
             atr=tech["atr"],
             vix=float(angel_service.vix or 14.5),
@@ -350,7 +356,7 @@ class DebateEngine:
             atm_strike=atm_strike,
             day_high=tech.get("day_high", spot + tech["atr"]),
             day_low=tech.get("day_low", spot - tech["atr"]),
-            day_open=spot,
+            day_open=opening,
             max_pain=max_pain,
             call_oi_wall=call_wall,
             put_oi_wall=put_wall,
@@ -374,13 +380,30 @@ class DebateEngine:
         # 1. Ingest market snapshot
         snapshot = await self.build_snapshot(sym)
 
+        # Account-scoped memory per request; never mutate shared agent prompts.
+        try:
+            memory = await retrieve_memory(user_id, snapshot.model_dump())
+        except Exception as exc:
+            logger.warning("Memory lookup unavailable: %s", type(exc).__name__)
+            memory = "### EPISODIC TRADING MEMORY (LESSONS FROM RECENT LOSSES & WINS)\nHistorical memory unavailable; do not invent prior results."
         # 2. Run Bull Agent & Bear Agent in parallel for low latency
-        bull_task = asyncio.create_task(self.bull_agent.analyze(snapshot))
-        bear_task = asyncio.create_task(self.bear_agent.analyze(snapshot))
+        bull_task = asyncio.create_task(self.bull_agent.analyze(snapshot, memory=memory))
+        bear_task = asyncio.create_task(self.bear_agent.analyze(snapshot, memory=memory))
         bull_output, bear_output = await asyncio.gather(bull_task, bear_task)
 
         # 3. Run Judge Agent evaluation with cross-examination
-        judge_output = await self.judge_agent.evaluate(snapshot, bull_output, bear_output)
+        judge_output = await self.judge_agent.evaluate(snapshot, bull_output, bear_output, memory=memory)
+        if judge_output.verdict in ("BUY CE", "BUY PE"):
+            rejection = trend_rejection(snapshot.model_dump(), judge_output.verdict[-2:], settings.AUTO_TREND_THRESHOLD_PCT)
+            # A genuine counter-trend verdict becomes NO_TRADE. Unknown data is
+            # flagged here and fails closed at automatic execution.
+            if rejection and snapshot.day_open and snapshot.session_reference != "UNKNOWN":
+                judge_output = judge_output.model_copy(update={
+                    "verdict": "NO_TRADE", "recommended_strike": 0.0, "selected_strike": None,
+                    "entry_price": 0.0, "stop_loss": 0.0, "target": 0.0,
+                    "risk_reward_ratio": "N/A", "risk_warning": rejection,
+                    "reasoning": rejection + " Original AI reasoning: " + judge_output.reasoning,
+                })
 
         # 4. Construct Debate Session
         import uuid
@@ -395,6 +418,7 @@ class DebateEngine:
             bear=bear_output,
             judge=judge_output,
             executed=False,
+            episodic_memory=memory,
             order_id=None,
             user_id=user_id,
         )
@@ -454,6 +478,8 @@ class DebateEngine:
                     break
         if not session or session.user_id != user_id:
             raise ValueError(f"Debate session #{debate_id} not found.")
+        if user_id is None:
+            raise ValueError("AI execution requires a signed-in account.")
         if session.executed:
             raise ValueError("This debate verdict was already executed.")
 
@@ -480,6 +506,14 @@ class DebateEngine:
                 strike = float(override_payload["strike"])
             if override_payload.get("option_type"):
                 opt_type = str(override_payload["option_type"]).upper()
+
+        # Rebuild live context at execution, not only at debate creation.
+        evidence_snapshot = session.market_snapshot
+        if auto:
+            evidence_snapshot = await self.build_snapshot(underlying)
+            rejection = trend_rejection(evidence_snapshot.model_dump(), opt_type, settings.AUTO_TREND_THRESHOLD_PCT)
+            if rejection:
+                raise ValueError(rejection)
 
         # ── Live price for the exact contract ────────────────────────────
         quote = await angel_service.get_option_quote(underlying, strike, opt_type)
@@ -526,7 +560,10 @@ class DebateEngine:
             "target": target,
         }
 
-        order_res = await paper_engine.place_order(order_req, user_id=user_id)
+        order_res = await paper_engine.place_order(order_req, user_id=user_id, ai_evidence={
+            "debate_id": session.id, "auto_executed": auto,
+            "snapshot": evidence_snapshot.model_dump(mode="json"), "confidence": judge.confidence,
+        })
         if order_res.get("status") != "EXECUTED" or not order_res.get("position_id"):
             raise ValueError(order_res.get("reject_reason") or order_res.get("message") or "Order did not open a position.")
 

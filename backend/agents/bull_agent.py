@@ -17,6 +17,7 @@ from google import genai
 from google.genai import types as genai_types
 
 from config import settings
+from adaptive_memory import prompt_with_memory
 from debate_schemas import BullAgentOutput, MarketSnapshot
 
 logger = logging.getLogger("bull_agent")
@@ -78,9 +79,10 @@ class BullAgent:
             except Exception as exc:
                 logger.warning("Could not initialize Gemini Client for BullAgent: %s", exc)
 
-    async def analyze(self, snapshot: MarketSnapshot) -> BullAgentOutput:
+    async def analyze(self, snapshot: MarketSnapshot, memory: str = "") -> BullAgentOutput:
         """Run bull analysis and return structured BullAgentOutput."""
         user_prompt = self._build_prompt(snapshot)
+        user_prompt += f"\nSession open: {snapshot.day_open}; session price reference: {snapshot.session_reference}. If not VWAP, do not call it true VWAP."
 
         models_to_try = [
             settings.GEMINI_MODEL,
@@ -100,7 +102,7 @@ class BullAgent:
                             model=model_name,
                             contents=user_prompt,
                             config=genai_types.GenerateContentConfig(
-                                system_instruction=_BULL_SYSTEM_PROMPT,
+                                system_instruction=prompt_with_memory(_BULL_SYSTEM_PROMPT, memory),
                                 response_mime_type="application/json",
                                 temperature=0.2,
                             ),
