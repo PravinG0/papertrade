@@ -149,14 +149,14 @@ function MarketMatrixBar({ snapshot }) {
         <div className="flex items-center gap-1.5">
           <span className="text-slate-400 uppercase text-[10px] font-semibold">PCR</span>
           <span className={`font-mono font-bold text-xs ${snapshot.pcr >= 1.0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-            {snapshot.pcr?.toFixed(2)}
+            {snapshot.pcr?.toFixed(2) ?? '—'}
           </span>
         </div>
         <div className="h-3 w-px bg-slate-800" />
         <div className="flex items-center gap-1.5">
           <span className="text-slate-400 uppercase text-[10px] font-semibold">CPR</span>
           <span className="font-mono text-amber-400 text-[11px] font-bold">
-            {snapshot.cpr_width_type === 'NARROW_TRENDING' ? '⚡ NARROW' : '↔ WIDE'}
+            {snapshot.cpr_width_type === 'NARROW_TRENDING' ? '⚡ NARROW' : snapshot.cpr_width_type === 'WIDE_RANGEBOUND' ? '↔ WIDE' : '—'}
           </span>
         </div>
         <div className="h-3 w-px bg-slate-800" />
@@ -547,10 +547,16 @@ export default function DebateArena({
   const isBank = displayedSymbol === 'BANKNIFTY';
   const lotSize = isBank ? 30 : displayedSymbol === 'SENSEX' ? 20 : 65;
 
-  const judgeVerdict = (judge.verdict || 'NO_TRADE').toUpperCase();
-  const isBuyCE = judgeVerdict.includes('CE');
-  const isBuyPE = judgeVerdict.includes('PE');
+  const judgeVerdict = String(judge.verdict || 'NO_TRADE').trim().toUpperCase();
+  const isBuyCE = judgeVerdict === 'BUY CE';
+  const isBuyPE = judgeVerdict === 'BUY PE';
   const isNoTrade = !isBuyCE && !isBuyPE;
+  const hasFallbackAgent = [bull, bear, judge].some((a) => a?.analysis_source === 'fallback');
+  const sourceBadge = (src) => {
+    if (src === 'gemini') return <span className="px-1.5 py-0.5 rounded bg-purple-950/70 border border-purple-700/60 text-purple-200 text-[9px] font-mono uppercase">Gemini AI</span>;
+    if (src === 'fallback') return <span className="px-1.5 py-0.5 rounded bg-amber-950/70 border border-amber-600/60 text-amber-200 text-[9px] font-mono uppercase">Fallback</span>;
+    return null;
+  };
 
   return (
     <div className="debate-arena space-y-4 max-w-7xl mx-auto pb-12">
@@ -802,8 +808,9 @@ export default function DebateArena({
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-[32rem] overflow-y-auto pr-1">
               {history.map((sess) => {
-                const isCE = sess.judge?.verdict?.includes('CE');
-                const isPE = sess.judge?.verdict?.includes('PE');
+                const sv = String(sess.judge?.verdict || 'NO_TRADE').trim().toUpperCase();
+                const isCE = sv === 'BUY CE';
+                const isPE = sv === 'BUY PE';
                 return (
                   <button
                     type="button"
@@ -878,6 +885,11 @@ export default function DebateArena({
               <strong>Risk / execution notice: </strong>{debate.skip_reason || judge.risk_warning}
             </div>
           )}
+          {hasFallbackAgent && (
+            <div role="status" className="min-w-0 break-words rounded-xl border border-amber-400 bg-amber-50 p-3 text-xs text-amber-900">
+              <strong>Gemini unavailable notice: </strong>One or more agents used deterministic quantitative fallback analysis. Automatic execution is blocked when Gemini is unavailable.
+            </div>
+          )}
 
 
           {/* Conviction Tug-of-War Bar */}
@@ -897,7 +909,10 @@ export default function DebateArena({
                     <div className="flex items-center gap-2">
                       <span className="text-2xl">🐂</span>
                       <div>
-                        <h3 className="font-bold text-ink text-sm sm:text-base">Bull Agent</h3>
+                        <div className="flex items-center gap-1.5">
+                          <h3 className="font-bold text-ink text-sm sm:text-base">Bull Agent</h3>
+                          {sourceBadge(bull.analysis_source)}
+                        </div>
                         <p className="text-[11px] text-emerald-400 font-medium">CE Call Option Strategist</p>
                       </div>
                     </div>
@@ -968,7 +983,10 @@ export default function DebateArena({
                     <div className="flex items-center gap-2">
                       <span className="text-2xl">🐻</span>
                       <div>
-                        <h3 className="font-bold text-ink text-sm sm:text-base">Bear Agent</h3>
+                        <div className="flex items-center gap-1.5">
+                          <h3 className="font-bold text-ink text-sm sm:text-base">Bear Agent</h3>
+                          {sourceBadge(bear.analysis_source)}
+                        </div>
                         <p className="text-[11px] text-rose-400 font-medium">PE Put Option Strategist</p>
                       </div>
                     </div>
@@ -1039,7 +1057,10 @@ export default function DebateArena({
                     <div className="flex items-center gap-2">
                       <span className="text-2xl">⚖️</span>
                       <div>
-                        <h3 className="font-black text-ink text-base">Judge & Risk Manager</h3>
+                        <div className="flex items-center gap-1.5">
+                          <h3 className="font-black text-ink text-base">Judge & Risk Manager</h3>
+                          {sourceBadge(judge.analysis_source)}
+                        </div>
                         <p className="text-[11px] text-amber-400 font-medium">Chief Risk Officer Final Verdict</p>
                       </div>
                     </div>
@@ -1079,7 +1100,7 @@ export default function DebateArena({
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
                         <span>INSTITUTIONAL RISK BOUNDS</span>
-                        <span className="text-emerald-400 font-mono">Lot: {lotSize} (Max SL ₹700)</span>
+                        <span className="text-emerald-400 font-mono">Lot: {lotSize} (Gross SL ₹700 ex-fees/gaps)</span>
                       </div>
 
                       <div className="grid grid-cols-2 gap-1.5 text-xs font-mono">

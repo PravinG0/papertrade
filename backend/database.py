@@ -471,39 +471,15 @@ class DailyReportModel(Base):
 # ── Database Initialization & Session Dependency ──────────────────────────────
 
 async def init_db() -> None:
-    """Create all database tables if they do not exist."""
+    """Create missing database tables and apply strictly additive columns/indexes."""
+    import os
+    if os.getenv("SKIP_DB_INIT", "").strip().lower() in ("1", "true", "yes"):
+        logger.info("SKIP_DB_INIT set; skipping automatic DDL on startup.")
+        return
+    from migrations import apply_additive_migrations
+
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-        # SQLite schema migration for newly added columns
-        if engine.dialect.name == "sqlite":
-            def _check_sqlite_columns(connection):
-                try:
-                    res = connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()
-                    col_names = [col[1] for col in res]
-                    if "google_id" not in col_names:
-                        connection.exec_driver_sql("ALTER TABLE users ADD COLUMN google_id VARCHAR(128)")
-                        connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_id ON users (google_id)")
-                    if "avatar_url" not in col_names:
-                        connection.exec_driver_sql("ALTER TABLE users ADD COLUMN avatar_url VARCHAR(512)")
-
-                    # Check daily_reports columns
-                    res_rep = connection.exec_driver_sql("PRAGMA table_info(daily_reports)").fetchall()
-                    if res_rep:
-                        rep_cols = [col[1] for col in res_rep]
-                        for c_name, c_def in [
-                            ("date", "VARCHAR(16) DEFAULT ''"),
-                            ("summary_metrics", "TEXT DEFAULT '{}'"),
-                            ("raw_analysis", "TEXT DEFAULT '{}'"),
-                            ("report_markdown", "TEXT DEFAULT ''"),
-                            ("report_html", "TEXT"),
-                        ]:
-                            if c_name not in rep_cols:
-                                connection.exec_driver_sql(f"ALTER TABLE daily_reports ADD COLUMN {c_name} {c_def}")
-                except Exception as e:
-                    logger.warning("Notice on SQLite table migration: %s", e)
-
-            await conn.run_sync(_check_sqlite_columns)
+        await apply_additive_migrations(engine, Base.metadata, conn=conn)
     logger.info("Database initialized successfully at %s", engine.url.render_as_string(hide_password=True))
 
 

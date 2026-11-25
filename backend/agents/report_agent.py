@@ -22,7 +22,7 @@ from google import genai
 from google.genai import types as genai_types
 from sqlalchemy import select
 
-from config import get_index_spec, normalize_index_symbol, settings
+from config import gemini_candidate_models, get_index_spec, normalize_index_symbol, settings
 from database import DailyReportModel, DebateRecordModel, PaperTradeModel, async_session_factory
 from paper_engine import paper_engine
 
@@ -142,8 +142,9 @@ class ReportAgent:
         target_date = (date_str or self._today_date())[:10]
         report_id = f"report-{target_date}" + (f"-u{user_id}" if user_id is not None else "-guest")
 
-        # 1. Fetch all executed trades for the day
-        trades = await paper_engine.get_daily_trades(target_date, user_id=user_id)
+        # 1. Fetch all executed trades for the day (excluding known replay teardowns)
+        raw_trades = await paper_engine.get_daily_trades(target_date, user_id=user_id)
+        trades = [t for t in raw_trades if t.get("exit_reason") != "REPLAY_STOPPED"]
 
         # 2. Query associated AI debate sessions from DB
         debates_by_pos_or_order: dict[str, dict[str, Any]] = {}
@@ -222,6 +223,19 @@ class ReportAgent:
             ai_json_str = json.dumps(ai_analysis)
 
             if db_report:
+                # Preserve prior report revision snapshot in AppKV (non-destructive audit trail for as-of QA-06/16)
+                from database import AppKVModel
+                rev_key = f"report-rev:{report_id}:{db_report.updated_at}"[:64]
+                if await session.get(AppKVModel, rev_key) is None:
+                    session.add(AppKVModel(
+                        key=rev_key,
+                        value=json.dumps({
+                            "date": db_report.date or db_report.report_date,
+                            "updated_at": db_report.updated_at,
+                            "net_pnl": db_report.net_pnl,
+                            "total_trades": db_report.total_trades,
+                        }),
+                    ))
                 db_report.date = target_date
                 db_report.report_date = target_date
                 db_report.total_trades = total_trades
@@ -346,7 +360,7 @@ class ReportAgent:
                 f"Session Metrics:\n{json.dumps(metrics, indent=2)}\n\n"
                 f"Executed Trades & AI Debate Context:\n{json.dumps(enriched_trades, indent=2)}"
             )
-            models_to_try = [settings.GEMINI_MODEL, "gemini-3.8-flash", "gemini-2.5-flash"]
+            models_to_try = gemini_candidate_models()
             for model_name in models_to_try:
                 try:
                     response = await asyncio.wait_for(
@@ -412,13 +426,10 @@ class ReportAgent:
                         f"breaching the pre-set risk threshold of {'₹' + f'{sl:.2f}' if sl is not None else 'market SL'}."
                     ),
                     "technical_indicators": (
-                        f"Reversal confirmed by momentum shift: {'Call writing expanded at strikes above entry' if is_ce else 'Put writing support failed to hold'}. "
-                        f"Intraday price action fell below VWAP and failed to defend the 20-period EMA, causing rapid premium erosion."
+                        "Quantitative fallback (Gemini unavailable): exact post-exit candle indicators were not independently audited for this trade."
                     ),
                     "failure_reasons": (
-                        f"The {'bullish' if is_ce else 'bearish'} thesis suffered a false breakout. "
-                        f"Market participants encountered institutional supply/demand absorption near key round-number strikes, "
-                        f"triggering dynamic stop orders and intraday long liquidation."
+                        f"Hypothesis (unverified fallback): adverse move of {price_drop_pct}% from entry ₹{entry:.2f} to ₹{exit_p:.2f} in {sym} ({opt_type}) breached stop loss."
                     ),
                     "key_takeaway": (
                         f"Strict adherence to the {'₹' + f'{sl:.2f}' if sl is not None else 'Stop Loss'} successfully protected capital from unmanaged max drawdown. "
@@ -441,12 +452,10 @@ class ReportAgent:
                         f"The premium expanded by +{gain_pct}% from ₹{entry:.2f} to precisely achieve the target objective of {'₹' + f'{tgt:.2f}' if tgt is not None else 'target'}."
                     ),
                     "supporting_indicators": (
-                        f"Strong technical confluence supported the move: {'Spot held firmly above VWAP and EMA-20 with PCR expansion' if is_ce else 'Spot broke through key support with heavy Call OI addition'}. "
-                        f"RSI sustained momentum above 60/below 40, validating institutional participation."
+                        "Quantitative fallback (Gemini unavailable): exact post-exit indicator series was not independently audited for this trade."
                     ),
                     "success_factors": (
-                        f"High-quality entry timing close to key structural support/resistance. "
-                        f"Favorable Risk-Reward execution captured the directional trend before gamma exhaustion."
+                        f"Observed favorable premium expansion of +{gain_pct}% from ₹{entry:.2f} to ₹{exit_p:.2f} reaching configured target."
                     ),
                     "key_takeaway": (
                         f"Excellent execution on {sym}. When directional confluence aligns with option chain open interest, "
@@ -580,8 +589,8 @@ class ReportAgent:
             md.append("Detailed institutional post-mortem for each trade that hit its stop loss:\n")
             for item in sl_list:
                 md.append(f"### Trade `{item.get('trade_id')}` — {item.get('symbol')}")
-                md.append(f"- **Entry Price:** ₹{item.get('entry_price', 0):.2f} | **Exit Price:** ₹{item.get('exit_price', 0):.2f} | **SL Trigger:** ₹{item.get('stop_loss', 0):.2f}")
-                md.append(f"- **Realized Loss:** `-₹{item.get('loss_amount', 0):,.2f}`")
+                md.append(f"- **Entry Price:** ₹{(item.get('entry_price') or 0):.2f} | **Exit Price:** ₹{(item.get('exit_price') or 0):.2f} | **SL Trigger:** {'₹' + format(float(item['stop_loss']), '.2f') if item.get('stop_loss') is not None else '—'}")
+                md.append(f"- **Realized Loss:** `-₹{(item.get('loss_amount') or 0):,.2f}`")
                 md.append(f"- **Market Conditions & Price Movement:** {item.get('market_conditions')}")
                 md.append(f"- **Technical Indicator Dynamics:** {item.get('technical_indicators')}")
                 md.append(f"- **Root Cause for Failed Prediction:** {item.get('failure_reasons')}")
@@ -594,8 +603,8 @@ class ReportAgent:
             md.append("Analytical breakdown of setups that reached their target profit objectives:\n")
             for item in tgt_list:
                 md.append(f"### Trade `{item.get('trade_id')}` — {item.get('symbol')}")
-                md.append(f"- **Entry Price:** ₹{item.get('entry_price', 0):.2f} | **Exit Price:** ₹{item.get('exit_price', 0):.2f} | **Target Level:** ₹{item.get('target', 0):.2f}")
-                md.append(f"- **Realized Profit:** `+₹{item.get('profit_amount', 0):,.2f}`")
+                md.append(f"- **Entry Price:** ₹{(item.get('entry_price') or 0):.2f} | **Exit Price:** ₹{(item.get('exit_price') or 0):.2f} | **Target Level:** {'₹' + format(float(item['target']), '.2f') if item.get('target') is not None else '—'}")
+                md.append(f"- **Realized Profit:** `+₹{(item.get('profit_amount') or 0):,.2f}`")
                 md.append(f"- **Market Trend Dynamics:** {item.get('market_trends')}")
                 md.append(f"- **Supporting Technical Confluences:** {item.get('supporting_indicators')}")
                 md.append(f"- **Critical Drivers of Success:** {item.get('success_factors')}")

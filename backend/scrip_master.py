@@ -218,7 +218,8 @@ class ScripMaster:
         """Map an order's symbol (real or legacy 'NIFTY24500CE') to a live contract."""
         c = self._by_symbol.get(symbol)
         if c:
-            return c
+            return c if (c.expiry >= self._today().isoformat() and c.name == underlying
+                         and c.strike == strike and c.option_type == opt) else None
         # Never roll a dated contract into a different expiry. Only legacy undated symbols may fall back.
         if symbol != f"{underlying}{int(strike)}{opt}":
             return None

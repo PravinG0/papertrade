@@ -23,9 +23,9 @@ from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
-from config import normalize_index_symbol, settings
+from config import get_session_bounds, normalize_index_symbol, settings, is_trading_day
 from database import AppKVModel, async_session_factory
 from debate_engine import debate_engine
 from paper_engine import paper_engine
@@ -43,18 +43,26 @@ _KV_KEY = "scheduler"
 
 def is_market_open(now: Optional[datetime] = None) -> bool:
     now = now or datetime.now(IST)
-    if now.weekday() >= 5:
+    bounds = get_session_bounds(now)
+    if not bounds:
         return False
-    hm = (now.hour, now.minute)
-    return (9, 15) <= hm < (15, 30)
+    start_t, end_t = bounds
+    return start_t <= now.time() < end_t
 
 
 def _next_open_after(now: datetime) -> datetime:
-    """Next 09:15 IST on a weekday strictly after `now`."""
-    d = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    if d <= now:
-        d += timedelta(days=1)
-    while d.weekday() >= 5:
+    """Next session open strictly after `now`."""
+    d = now.replace(second=0, microsecond=0)
+    for offset in range(0, 30):
+        day = (d + timedelta(days=offset)).date()
+        bounds = get_session_bounds(day)
+        if not bounds:
+            continue
+        open_dt = datetime.combine(day, bounds[0], tzinfo=IST)
+        if open_dt > now:
+            return open_dt
+    d = now.replace(hour=9, minute=15, second=0, microsecond=0) + timedelta(days=1)
+    while not is_trading_day(d):
         d += timedelta(days=1)
     return d
 
@@ -62,14 +70,14 @@ def _next_open_after(now: datetime) -> datetime:
 class DebateScheduler:
     """Async background debate scheduler with optional auto-execution."""
 
-    def __init__(self) -> None:
+    def __init__(self, user_id: Optional[int] = None) -> None:
         self.is_running: bool = False
         self.interval_minutes: int = 5
         self.symbol: str = "NIFTY"
         self.auto_execute: bool = False
         self.market_hours_only: bool = True
         self.lots: int = 1
-        self.user_id: Optional[int] = None
+        self.user_id: Optional[int] = user_id
 
         self.last_run: Optional[str] = None
         self.next_run: Optional[str] = None
@@ -119,9 +127,9 @@ class DebateScheduler:
         })
         try:
             async with async_session_factory() as session:
-                row = await session.get(AppKVModel, _KV_KEY)
+                row = await session.get(AppKVModel, f"scheduler:{self.user_id}")
                 if row is None:
-                    session.add(AppKVModel(key=_KV_KEY, value=payload))
+                    session.add(AppKVModel(key=f"scheduler:{self.user_id}", value=payload))
                 else:
                     row.value = payload
                 await session.commit()
@@ -132,7 +140,7 @@ class DebateScheduler:
         """Resume the scheduler after a restart if it was running."""
         try:
             async with async_session_factory() as session:
-                row = await session.get(AppKVModel, _KV_KEY)
+                row = await session.get(AppKVModel, f"scheduler:{self.user_id}")
             if not row:
                 return
             cfg = json.loads(row.value)
@@ -189,8 +197,8 @@ class DebateScheduler:
                 "DebateScheduler started: every %dm, %s, auto_execute=%s, user=%s, next_run=%s",
                 self.interval_minutes, self.symbol, self.auto_execute, self.user_id, self.next_run,
             )
-        await self._save_state()
-        return self.get_status()
+            await self._save_state()
+        return self.get_status(self.user_id)
 
     async def stop(self, user_id: Optional[int] = None) -> dict:
         """Stop the background debate scheduler loop (owner only)."""
@@ -202,8 +210,8 @@ class DebateScheduler:
             self.status_text = "Standby"
             await self._cancel_task()
             logger.info("DebateScheduler stopped cleanly.")
-        await self._save_state()
-        return self.get_status()
+            await self._save_state()
+        return self.get_status(self.user_id)
 
     async def shutdown(self) -> None:
         """Stop the loop on process shutdown WITHOUT clearing the persisted 'running' flag."""
@@ -269,10 +277,41 @@ class DebateScheduler:
         finally:
             self._is_debating = False
 
+    async def _claim_slot(self, now: datetime) -> bool:
+        """Atomically claim this user's interval slot in app_kv to prevent duplicate runs on restart."""
+        if self.user_id is None:
+            return True
+        iv = max(1, int(self.interval_minutes))
+        slot_minute = now.minute - (now.minute % iv)
+        slot_val = f"{now.strftime('%Y-%m-%d %H')}:{slot_minute:02d}:{iv}"
+        slot_key = f"scheduler-slot:{self.user_id}:{self.symbol}"
+        try:
+            async with async_session_factory() as session:
+                await session.execute(
+                    update(AppKVModel).where(AppKVModel.key == slot_key).values(value=AppKVModel.value)
+                )
+                row = await session.get(AppKVModel, slot_key)
+                if row is not None and row.value == slot_val:
+                    return False
+                if row is None:
+                    session.add(AppKVModel(key=slot_key, value=slot_val))
+                else:
+                    row.value = slot_val
+                await session.commit()
+            return True
+        except Exception as exc:
+            logger.warning("Could not verify scheduler slot lease (%s); skipping duplicate guard failure cleanly.", exc)
+            return False
+
     async def _run_cycle(self) -> None:
         self._is_debating = True
         self.status_text = "Agents deliberating..."
         try:
+            now = datetime.now(IST)
+            if not await self._claim_slot(now):
+                self.status_text = "Slot already claimed (restart/duplicate guard)"
+                logger.info("Skipped duplicate scheduler slot for user=%s symbol=%s", self.user_id, self.symbol)
+                return
             logger.info("Scheduled debate for %s ...", self.symbol)
             session = await asyncio.wait_for(
                 debate_engine.run_debate(symbol=self.symbol, user_id=self.user_id), timeout=DEBATE_TIMEOUT_SECONDS
@@ -344,13 +383,64 @@ class DebateScheduler:
             await skip(f"execution failed: {exc}")
 
 
-# Singleton instance
-_scheduler: Optional[DebateScheduler] = None
+class SchedulerRegistry:
+    """One scheduler per signed-in account in a single backend process.
+
+    Persist account configs separately. Multi-worker leader election is not provided.
+    """
+    def __init__(self):
+        self.schedulers: dict[int, DebateScheduler] = {}
+
+    def for_user(self, user_id):
+        if user_id is None:
+            raise PermissionError("Sign in to use auto-debate.")
+        if user_id not in self.schedulers:
+            self.schedulers[user_id] = DebateScheduler(user_id)
+        return self.schedulers[user_id]
+
+    def get_status(self, viewer_id=None):
+        scheduler = self.schedulers.get(viewer_id)
+        return (scheduler or DebateScheduler(viewer_id)).get_status(viewer_id)
+
+    async def start(self, *args, user_id=None, **kwargs):
+        return await self.for_user(user_id).start(*args, user_id=user_id, **kwargs)
+
+    async def stop(self, user_id=None):
+        return await self.for_user(user_id).stop(user_id=user_id)
+
+    async def restore(self):
+        try:
+            async with async_session_factory() as session:
+                rows = (await session.execute(select(AppKVModel).where(
+                    AppKVModel.key.like("scheduler:%") | (AppKVModel.key == _KV_KEY)))).scalars().all()
+            configs = {}
+            for row in rows:
+                try:
+                    cfg = json.loads(row.value)
+                    uid = cfg.get("user_id")
+                    if type(uid) is not int or uid <= 0:
+                        continue
+                    if row.key == _KV_KEY:
+                        configs.setdefault(uid, cfg)
+                    elif row.key == f"scheduler:{uid}":
+                        configs[uid] = cfg
+                except (ValueError, TypeError, AttributeError):
+                    continue
+            for uid, cfg in configs.items():
+                if cfg.get("is_running"):
+                    await self.start(interval_minutes=cfg.get("interval_minutes", 5),
+                        symbol=cfg.get("symbol", "NIFTY"), auto_execute=cfg.get("auto_execute", False),
+                        market_hours_only=cfg.get("market_hours_only", True), lots=cfg.get("lots", 1),
+                        user_id=uid, immediate=False)
+        except Exception as exc:
+            logger.warning("Could not restore account schedulers: %s", exc)
+
+    async def shutdown(self):
+        await asyncio.gather(*(s.shutdown() for s in self.schedulers.values()))
 
 
-def get_scheduler() -> DebateScheduler:
-    """Return the global DebateScheduler singleton instance."""
-    global _scheduler
-    if _scheduler is None:
-        _scheduler = DebateScheduler()
+_scheduler = SchedulerRegistry()
+
+
+def get_scheduler() -> SchedulerRegistry:
     return _scheduler

@@ -34,7 +34,7 @@ from google import genai
 from google.genai import types as genai_types
 from sqlalchemy import select
 
-from config import get_index_spec, normalize_index_symbol, settings
+from config import gemini_candidate_models, get_index_spec, normalize_index_symbol, settings
 from database import (
     DailyReportModel,
     DebateRecordModel,
@@ -390,13 +390,7 @@ class DailyReportAgent:
         """Call Google Gemini to generate comprehensive analysis and report."""
         user_prompt = self._build_gemini_prompt(ctx)
 
-        models_to_try = [
-            settings.GEMINI_MODEL,
-            "gemini-3.8-flash",
-        ]
-        models_to_try = list(dict.fromkeys([m for m in models_to_try if m]))
-        # Retry logic for transient spikes
-        models_to_try = models_to_try * 2
+        models_to_try = gemini_candidate_models()
 
         for model_name in models_to_try:
             try:
@@ -625,7 +619,7 @@ Return a JSON object with this exact structure:
             ema20 = float(snap.get("ema_20") or snap.get("spot_price") or 25000.0)
             ema50 = float(snap.get("ema_50") or snap.get("spot_price") or 25000.0)
             cpr_width = snap.get("cpr_width_type", "WIDE_RANGEBOUND")
-            pcr = float(snap.get("pcr") or 1.0)
+            pcr = snap.get("pcr")
             ce_chg = float(snap.get("ce_oi_change") or 0.0)
             pe_chg = float(snap.get("pe_oi_change") or 0.0)
             call_wall = snap.get("call_oi_wall") or "overhead resistance"
@@ -650,7 +644,7 @@ Return a JSON object with this exact structure:
                 )
                 oi_text = (
                     f"Aggressive Call writing (+{ce_chg:,.0f} CE OI change) formed a formidable resistance wall at {call_wall}, "
-                    f"while PCR softened to {pcr:.2f}, capping upside potential."
+                    f"while PCR softened to {format(float(pcr), '.2f') if pcr is not None else 'unavailable'}, capping upside potential."
                 )
                 failure_reasons = [
                     f"Failure to hold VWAP (₹{vwap:,.2f}) with aggressive Call OI accumulation (+{ce_chg:,.0f} contracts).",
@@ -667,7 +661,7 @@ Return a JSON object with this exact structure:
                 cpr_text = f"CPR regime was {cpr_width}. Intraday support at CPR Bottom Central (BC) held firmly, thwarting downside extension."
                 oi_text = (
                     f"Put writers actively defended {put_wall} (+{pe_chg:,.0f} PE OI change), generating institutional bid support "
-                    f"and lifting PCR to {pcr:.2f}."
+                    f"and lifting PCR to {format(float(pcr), '.2f') if pcr is not None else 'unavailable'}."
                 )
                 failure_reasons = [
                     f"Intraday short squeeze as spot reclaimed VWAP (₹{vwap:,.2f}) and EMA-20 (₹{ema20:,.2f}).",
@@ -719,7 +713,7 @@ Return a JSON object with this exact structure:
             ema20 = float(snap.get("ema_20") or snap.get("spot_price") or 25000.0)
             ema50 = float(snap.get("ema_50") or snap.get("spot_price") or 25000.0)
             cpr_width = snap.get("cpr_width_type", "NARROW_TRENDING")
-            pcr = float(snap.get("pcr") or 1.15)
+            pcr = snap.get("pcr")
             pe_chg = float(snap.get("pe_oi_change") or 0.0)
             ce_chg = float(snap.get("ce_oi_change") or 0.0)
 
@@ -728,7 +722,7 @@ Return a JSON object with this exact structure:
                 ema_text = f"Spot maintained healthy ascending trajectory above EMA-20 (₹{ema20:,.2f}) and EMA-50 (₹{ema50:,.2f})."
                 vwap_text = f"Spot consistently printed higher lows above rising VWAP (₹{vwap:,.2f}), confirming dominant buyer aggression."
                 cpr_text = f"CPR regime ({cpr_width}) supported continuous directional trend without whip-sawing."
-                oi_text = f"Put writers heavily added contracts (+{pe_chg:,.0f} PE OI), building a strong floor with PCR at {pcr:.2f}."
+                oi_text = f"Put writers heavily added contracts (+{pe_chg:,.0f} PE OI), building a strong floor with PCR at {format(float(pcr), '.2f') if pcr is not None else 'unavailable'}."
                 success_factors = [
                     f"Decisive confluence of spot trading above VWAP (₹{vwap:,.2f}) with expanding RSI ({rsi:.1f}).",
                     "Strong Put writing absorption preventing pullbacks and accelerating target fill.",
@@ -738,7 +732,7 @@ Return a JSON object with this exact structure:
                 ema_text = f"Spot stayed decisively below EMA-20 (₹{ema20:,.2f}) and EMA-50 (₹{ema50:,.2f}), with moving averages acting as overhead resistance."
                 vwap_text = f"VWAP (₹{vwap:,.2f}) capped all minor pullbacks, with volume weighting heavily on the offer side."
                 cpr_text = f"Breakdown through CPR Top Central (TC) and Pivot triggered swift downward expansion."
-                oi_text = f"Massive Call writing (+{ce_chg:,.0f} CE OI) coupled with Put unwinding drove PCR down to {pcr:.2f}."
+                oi_text = f"Massive Call writing (+{ce_chg:,.0f} CE OI) coupled with Put unwinding drove PCR down to {format(float(pcr), '.2f') if pcr is not None else 'unavailable'}."
                 success_factors = [
                     f"Clean breakdown below VWAP (₹{vwap:,.2f}) and EMA-20 with heavy Call writing overhead.",
                     "Sustained downward momentum driving rapid option premium expansion directly to target.",

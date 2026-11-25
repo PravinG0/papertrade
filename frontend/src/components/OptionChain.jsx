@@ -149,54 +149,15 @@ export default function OptionChain({
         });
       }
     } catch (err) {
-      console.warn('Failed to fetch option chain from backend, generating fallback strikes:', err);
-      // Generate synthetic option chain around spot price so UI is always interactive
+      console.warn('Failed to fetch option chain from backend:', err);
+      // Never invent fake random option prices on feed failure; mark stale and show unavailability notice.
       setChainMeta((m) => ({ ...m, data_source: 'offline' }));
-      const currentSpot = spotRef.current || (selectedIndex === 'BANKNIFTY' ? 50200 : 23500);
-      const atmStrike = Math.round(currentSpot / strikeStep) * strikeStep;
-      const count = Number(strikeCount) || 10;
-      const synthetic = [];
-
-      for (let i = -count; i <= count; i++) {
-        const strike = atmStrike + i * strikeStep;
-        const dist = Math.abs(currentSpot - strike);
-        const isCeItm = strike < currentSpot;
-        const isPeItm = strike > currentSpot;
-
-        const ceBase = Math.max(10, currentSpot - strike + 120 + Math.random() * 20);
-        const peBase = Math.max(10, strike - currentSpot + 120 + Math.random() * 20);
-
-        synthetic.push({
-          strike,
-          is_atm: strike === atmStrike,
-          ce: {
-            ltp: Number(ceBase.toFixed(2)),
-            bid: Number((ceBase - 0.5).toFixed(2)),
-            ask: Number((ceBase + 0.5).toFixed(2)),
-            oi: Math.floor(Math.max(50000, 1500000 - dist * 300)),
-            oi_change: Math.floor((Math.random() - 0.4) * 80000),
-            volume: Math.floor(Math.max(20000, 800000 - dist * 200)),
-            iv: Number((13.5 + Math.random() * 2).toFixed(1)),
-            delta: Number((isCeItm ? 0.65 : 0.35).toFixed(2)),
-          },
-          pe: {
-            ltp: Number(peBase.toFixed(2)),
-            bid: Number((peBase - 0.5).toFixed(2)),
-            ask: Number((peBase + 0.5).toFixed(2)),
-            oi: Math.floor(Math.max(50000, 1500000 - dist * 300)),
-            oi_change: Math.floor((Math.random() - 0.4) * 80000),
-            volume: Math.floor(Math.max(20000, 800000 - dist * 200)),
-            iv: Number((14.2 + Math.random() * 2).toFixed(1)),
-            delta: Number((isPeItm ? -0.65 : -0.35).toFixed(2)),
-          },
-        });
-      }
-      setChain(synthetic);
+      setError('Option chain data unavailable. Check backend connection or Angel One market feed.');
     } finally {
       chainBusy.current = false;
       setLoading(false);
     }
-  }, [selectedIndex, strikeCount, selectedExpiry, strikeStep]);
+  }, [selectedIndex, strikeCount, selectedExpiry]);
 
   useEffect(() => {
     fetchChain();
@@ -391,6 +352,11 @@ export default function OptionChain({
             <RefreshCw size={13} className={loading ? 'animate-spin text-cyan-400' : ''} />
           </button>
         </div>
+        {error && (
+          <div role="alert" className="w-full text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded px-2.5 py-1.5">
+            {error}
+          </div>
+        )}
       </div>
 
       {/* Main Table */}

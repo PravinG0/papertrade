@@ -372,7 +372,7 @@ class AngelService:
             if cached and cached[1].get("source") in ("live", "stale"):
                 # Keep the last REAL price (flagged stale) rather than inventing one.
                 stale = cached[1].copy()
-                stale["source"] = "stale" if now - cached[0] > 30.0 else "live"
+                stale["source"] = "stale" if now - cached[0] > 10.0 else "live"
                 result.append(stale)
             elif cached and now - cached[0] < 30.0:
                 result.append(cached[1].copy())
@@ -751,6 +751,51 @@ class AngelService:
     def _pick_contract(self, symbol: str, underlying: str, strike: float, opt: str) -> Optional[Contract]:
         return scrip_master.resolve(symbol, normalize_index_symbol(underlying), strike, opt.upper())
 
+    @staticmethod
+    def _parse_exchange_quote_time(item: dict[str, Any]) -> Optional[datetime]:
+        """Parse SmartAPI FULL quote exchange feed/trade timestamp if present."""
+        raw = item.get("exchFeedTime") or item.get("exchTradeTime")
+        if not raw or not isinstance(raw, str):
+            return None
+        s = raw.strip()
+        for fmt in ("%d-%b-%Y %H:%M:%S", "%d-%m-%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(s, fmt).replace(tzinfo=IST)
+            except ValueError:
+                continue
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            return dt.replace(tzinfo=IST) if dt.tzinfo is None else dt.astimezone(IST)
+        except ValueError:
+            return None
+
+    def _is_quote_valid_and_fresh(
+        self, token: str, item: Optional[dict[str, Any]], max_age_seconds: float = 15.0
+    ) -> tuple[bool, Optional[datetime], Optional[float]]:
+        """Validate finite positive LTP, local cache age, and exchange timestamp when present."""
+        if not item:
+            return False, None, None
+        try:
+            ltp = float(item.get("ltp") or 0)
+        except (TypeError, ValueError):
+            return False, None, None
+        if not math.isfinite(ltp) or ltp <= 0:
+            return False, None, None
+        hit = self._tok_cache.get(token)
+        age_sec: Optional[float] = round(max(0.0, time.time() - hit[0]), 2) if hit else None
+        if age_sec is not None and age_sec > max_age_seconds:
+            return False, None, age_sec
+        exch_dt = self._parse_exchange_quote_time(item)
+        if exch_dt is not None:
+            now_ist = datetime.now(tz=IST)
+            from config import is_trading_day
+            # Only reject stale exchange timestamps when exchange session is currently active (09:16-15:30 IST).
+            if is_trading_day(now_ist) and (9, 16) <= (now_ist.hour, now_ist.minute) < (15, 30):
+                exch_age = (now_ist - exch_dt).total_seconds()
+                if exch_age > max(60.0, max_age_seconds * 4.0) or exch_age < -60.0:
+                    return False, exch_dt, age_sec
+        return True, exch_dt, age_sec
+
     async def get_option_ltps(self, legs: list[dict[str, Any]]) -> dict[str, float]:
         """Live LTP for open positions/orders. Returns {leg['symbol']: ltp}; unresolved legs are omitted."""
         if not legs or not scrip_master.is_loaded:
@@ -768,14 +813,15 @@ class AngelService:
         out: dict[str, float] = {}
         for sym, c in pairs.items():
             q = quotes.get(c.token)
-            if q and float(q.get("ltp") or 0) > 0:
+            ok, _, _ = self._is_quote_valid_and_fresh(c.token, q, max_age_seconds=10.0)
+            if ok and q:
                 out[sym] = round(float(q["ltp"]), 2)
         return out
 
     async def get_option_quote(
         self, underlying: str, strike: float, option_type: str, expiry: Optional[str] = None
     ) -> Optional[dict[str, Any]]:
-        """Fresh live quote (symbol, ltp, bid, ask, lot size) for one contract; None if unavailable."""
+        """Fresh live quote (symbol, ltp, bid, ask, lot size) for one contract; None if unavailable/stale."""
         await self.ensure_contracts()
         name = normalize_index_symbol(underlying)
         exps = scrip_master.expiries(name)
@@ -788,7 +834,8 @@ class AngelService:
         if not c:
             return None
         q = (await self.get_token_quotes([(c.exchange, c.token)], ttl=1.0)).get(c.token)
-        if not q or float(q.get("ltp") or 0) <= 0:
+        ok, exch_dt, age_sec = self._is_quote_valid_and_fresh(c.token, q, max_age_seconds=10.0)
+        if not ok or not q:
             return None
         depth = q.get("depth") or {}
         bid = float(((depth.get("buy") or [{}])[0]).get("price") or 0)
@@ -800,6 +847,8 @@ class AngelService:
             "bid": round(bid, 2),
             "ask": round(ask, 2),
             "lot_size": c.lot_size,
+            "exchange_timestamp": exch_dt.isoformat() if exch_dt else None,
+            "quote_age_seconds": age_sec,
         }
 
     def _oi_change(self, token: str, oi: float) -> float:

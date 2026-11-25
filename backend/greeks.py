@@ -235,10 +235,12 @@ def calculate_pcr(chain: list[dict[str, Any]]) -> dict[str, Any]:
         total_ce_vol += int(ce.get("volume", 0) or 0)
         total_pe_vol += int(pe.get("volume", 0) or 0)
 
-    pcr_oi = round(total_pe_oi / max(total_ce_oi, 1), 3) if total_ce_oi > 0 else 1.0
-    pcr_vol = round(total_pe_vol / max(total_ce_vol, 1), 3) if total_ce_vol > 0 else 1.0
+    pcr_oi = round(total_pe_oi / max(total_ce_oi, 1), 3) if total_ce_oi > 0 else None
+    pcr_vol = round(total_pe_vol / max(total_ce_vol, 1), 3) if total_ce_vol > 0 else None
 
-    if pcr_oi > 1.25:
+    if pcr_oi is None:
+        sentiment = "UNAVAILABLE"
+    elif pcr_oi > 1.25:
         sentiment = "BULLISH"
     elif pcr_oi < 0.75:
         sentiment = "BEARISH"
@@ -352,21 +354,38 @@ def calculate_strategy_payoff(
         prev_pnl = total_pnl
         prev_spot = s
 
-    pnl_values = [pt["pnl"] for pt in curve]
-    min_pnl = min(pnl_values) if pnl_values else 0.0
-    max_pnl = max(pnl_values) if pnl_values else 0.0
+    def payoff_at(s):
+        return sum((max(0.0, s - float(leg['strike'])) if leg['option_type'].upper() == 'CE'
+                    else max(0.0, float(leg['strike']) - s)) * int(leg['quantity'])
+                   * (1 if leg['side'].upper() == 'BUY' else -1) for leg in legs) + net_premium
 
-    # Risk to Reward
-    if abs(min_pnl) > 0:
-        rr = f"1 : {round(max_pnl / abs(min_pnl), 2)}" if max_pnl > 0 else "N/A"
+    bounds = sorted(set([0.0] + strikes))
+    values = [payoff_at(s) for s in bounds]
+    slope = sum(int(leg['quantity']) * (1 if leg['side'].upper() == 'BUY' else -1)
+                for leg in legs if leg['option_type'].upper() == 'CE')
+    max_pnl = "Unlimited" if slope > 0 else round(max(0, max(values)), 2)
+    min_pnl = "Unlimited" if slope < 0 else round(min(0, min(values)), 2)
+    # Exact zero crossings on the piecewise-linear expiry function, including its tail.
+    roots = []
+    for x, y, px, py in zip(bounds, bounds[1:], values, values[1:]):
+        if px == 0 and py != 0: roots.append(x)
+        if py == 0 and px != 0: roots.append(y)
+        if px * py < 0: roots.append(x - px * (y - x) / (py - px))
+    if slope and -values[-1] / slope >= 0:
+        roots.append(bounds[-1] - values[-1] / slope)
+    breakevens = sorted(set(round(x, 1) for x in roots))
+    if isinstance(min_pnl, str) or isinstance(max_pnl, str):
+        rr = "Unbounded payoff"
+    elif min_pnl < 0 and max_pnl > 0:
+        rr = f"1 : {round(max_pnl / abs(min_pnl), 2)}"
     else:
-        rr = "Zero Downside" if max_pnl > 0 else "Flat"
+        rr = "Zero Downside" if max_pnl > 0 else "N/A"
 
     return {
         "spot": spot,
         "curve": curve,
-        "max_profit": max_pnl if max_pnl < 9999999 else "Unlimited",
-        "max_loss": min_pnl if min_pnl > -9999999 else "Unlimited",
+        "max_profit": max_pnl,
+        "max_loss": min_pnl,
         "breakevens": breakevens,
         "net_premium": round(net_premium, 2),
         "is_credit": net_premium > 0,

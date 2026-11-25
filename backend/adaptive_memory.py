@@ -122,6 +122,8 @@ def build_memory(reports, trades, snapshot, now, short_days=5, long_days=30, thr
         day = row.get('date', '')
         analysis = object_json(row.get('raw_analysis')) or object_json(row.get('ai_analysis_json'))
         updated = parse_time(row.get('updated_at'))
+        if updated and updated > now.astimezone(IST):
+            continue
         # Legacy rows have no completion flag; exclude known intraday/incomplete reports.
         if updated and updated.date().isoformat() == day and (updated.hour, updated.minute) < (15, 30):
             continue
@@ -153,7 +155,7 @@ def build_memory(reports, trades, snapshot, now, short_days=5, long_days=30, thr
     closed = []
     for t in trades:
         end = parse_time(t.get('closed_at'))
-        if t.get('status') == 'CLOSED' and end and end <= now and t.get('exit_reason') != 'WALLET_RESET' and t.get('underlying') == snapshot.get('symbol'):
+        if t.get('status') == 'CLOSED' and end and end <= now and t.get('exit_reason') not in ('WALLET_RESET', 'REPLAY_STOPPED') and t.get('underlying') == snapshot.get('symbol'):
             closed.append((end.date().isoformat(), t))
     past_days = sorted({d for d, _ in closed if d < today}, reverse=True)[:long_days]
     current = [t for d, t in closed if d == today]

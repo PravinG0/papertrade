@@ -290,6 +290,7 @@ export default function OrderModal({
           )}
 
           {/* Margin Summary */}
+          {!isBuy && <p role="note" className="text-xs text-amber-700 dark:text-amber-300">Short-option margin is a simplified paper-trading premium reserve, not broker or exchange margin. Losses may exceed this reserve.</p>}
           <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1.5 text-xs">
             <div className="flex items-center justify-between text-slate-400">
               <span>Required Margin:</span>

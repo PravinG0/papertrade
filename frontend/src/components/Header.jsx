@@ -48,17 +48,18 @@ export default function Header({
   const capital = Number(portfolio?.net_liquidation_value ?? (cash + margin + unrealizedPnl));
   const netPnl = Number(portfolio?.account_net_pnl ?? (capital - initialCapital));
   const tradePnl = Number(portfolio?.current_cycle_trade_pnl ?? (Number(portfolio?.realized_pnl ?? 0) + unrealizedPnl));
+  const marginDiscrepancy = Number(portfolio?.margin_discrepancy ?? 0);
   const balanceDifference = Number(portfolio?.historical_balance_difference ?? (netPnl - tradePnl));
   const money = (value) => `₹${Math.abs(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const signedMoney = (value) => `${value < 0 ? '−' : '+'}${money(value)}`;
 
   const renderTicker = (symbol, label, defaultLtp) => {
     const item = indices[symbol] || {
-      ltp: defaultLtp,
+      ltp: null,
       change: 0,
       change_pct: 0,
     };
-    const ltp = item.ltp ?? defaultLtp;
+    const ltp = item.ltp;
     const change = item.change ?? 0;
     const changePct = item.change_pct ?? (item.percent_change ?? 0);
     const isUp = change >= 0;
@@ -67,7 +68,7 @@ export default function Header({
       <div className="flex items-center gap-2 px-3 py-1 bg-slate-900/80 rounded-lg border border-slate-800/80 text-xs">
         <span className="font-semibold text-slate-300 tracking-wide">{label}</span>
         <span className="font-mono font-bold text-slate-100 num-tabular">
-          ₹{Number(ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          {ltp == null ? '—' : `₹${Number(ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
         </span>
         <span
           className={`flex items-center gap-0.5 text-[11px] font-mono font-medium px-1.5 py-0.2 rounded ${
@@ -144,7 +145,7 @@ export default function Header({
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-950/70 border border-amber-500/60 text-amber-300 text-[11px] sm:text-xs font-semibold"
                 title={
                   feedInfo.source === 'stale'
-                    ? 'Angel One feed interrupted - showing last known real prices'
+                    ? 'Feed unavailable or delayed; prices may be old'
                     : 'Angel One is not connected - prices are simulated and will not match your broker'
                 }
               >
@@ -195,6 +196,7 @@ export default function Header({
             <span>Available cash <b className="text-ink">{cash < 0 ? '−' : ''}{money(cash)}</b></span>
             <span>Margin used <b className="text-ink">{money(margin)}</b></span>
             <span>Trade P&amp;L <b className={tradePnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}>{signedMoney(tradePnl)}</b></span>
+            {Math.abs(marginDiscrepancy) >= 0.01 && <span className="text-amber-700 font-semibold" title="Stored reserve differs from active trade premiums. The displayed margin is derived from active positions; historical cash is not automatically repaired.">Stored margin mismatch: {signedMoney(marginDiscrepancy)}</span>}
             {Math.abs(balanceDifference) >= 0.01 && <span className="text-amber-700 font-semibold" title="Stored wallet and trade ledger differ. This may be due to older resets or accounting discrepancies. No balance has been changed.">Unreconciled balance: {signedMoney(balanceDifference)}</span>}
           </div>
 

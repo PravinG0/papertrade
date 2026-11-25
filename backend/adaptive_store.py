@@ -16,9 +16,13 @@ async def retrieve_memory(user_id, snapshot, now=None):
         reports = (await db.execute(select(DailyReportModel).where(
             DailyReportModel.user_id == user_id, date < now.date().isoformat(),
             DailyReportModel.total_trades > 0).order_by(date.desc(), DailyReportModel.updated_at.desc()).limit(60))).scalars().all()
+        known_replay = (await db.execute(select(PaperTradeModel.created_at, PaperTradeModel.closed_at).where(
+            PaperTradeModel.user_id == user_id, PaperTradeModel.exit_reason == 'REPLAY_STOPPED'))).all()
+        known_replay_days = {str(t)[:10] for row in known_replay for t in row if t}
         report_data = [dict(date=r.date or r.report_date, total_trades=r.total_trades,
                             raw_analysis=r.raw_analysis, ai_analysis_json=r.ai_analysis_json,
-                            updated_at=r.updated_at, open_trades_count=r.open_trades_count) for r in reports]
+                            updated_at=r.updated_at, open_trades_count=r.open_trades_count) for r in reports
+                       if (r.date or r.report_date) not in known_replay_days]
         rows = (await db.execute(select(PaperTradeModel, AITradeEvidenceModel).outerjoin(
             AITradeEvidenceModel, AITradeEvidenceModel.position_id == PaperTradeModel.id).where(
             PaperTradeModel.user_id == user_id, PaperTradeModel.underlying == snapshot['symbol'],
@@ -51,6 +55,9 @@ async def guard_auto_fill(db, user_id, order, now=None):
     rows = (await db.execute(select(PaperTradeModel).where(
         PaperTradeModel.user_id == user_id, or_(func.substr(PaperTradeModel.created_at, 1, 10).between(first_date, last_date),
         func.substr(PaperTradeModel.closed_at, 1, 10) >= cutoff)))).scalars().all()
+    existing = (await db.execute(select(PaperTradeModel.id).where(
+        PaperTradeModel.user_id == user_id, PaperTradeModel.underlying == order['underlying'],
+        PaperTradeModel.status == 'ACTIVE').limit(1))).scalar_one_or_none()
     ids = [r.id for r in rows]
     auto_ids = set()
     # Join rather than an unbounded IN list, for SQLite and PostgreSQL compatibility.
@@ -66,6 +73,7 @@ async def guard_auto_fill(db, user_id, order, now=None):
             DebateRecordModel.user_id == user_id, PaperTradeModel.user_id == user_id,
             DebateRecordModel.executed == 1, func.substr(PaperTradeModel.created_at, 1, 10).between(first_date, last_date)))).scalars().all()
         auto_ids.update(r.position_id for r in legacy if object_json(r.payload).get('auto_executed') is True)
-    return execution_rejection([r.to_dict() for r in rows], auto_ids, now,
+    rejection = execution_rejection([r.to_dict() for r in rows], auto_ids, now,
         order['underlying'], order['strike'], order['option_type'], settings.AUTO_MAX_DAILY_TRADES,
         settings.AUTO_REPEAT_STRIKE_COOLDOWN_MINUTES)
+    return rejection or ('A position in this index is already open.' if existing is not None else None)

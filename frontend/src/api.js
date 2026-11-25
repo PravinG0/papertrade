@@ -94,7 +94,8 @@ export const getExpiries = (symbol = 'NIFTY') =>
   });
 
 // Trading & Portfolio Endpoints
-export const getTradingState = () => api.get('/trading/state');
+export const getTradingState = (lightweight = false) =>
+  api.get('/trading/state', lightweight ? { params: { include_history: false } } : undefined);
 
 export const placeOrder = (orderData) => api.post('/trading/order', orderData, { timeout: 45000 });
 

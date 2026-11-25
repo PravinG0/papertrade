@@ -13,13 +13,19 @@ export default function PcrOiPanel({
     setLoading(true);
     try {
       const res = await getPcrOi(selectedIndex);
-      if (res.data && res.data.pcr != null) {
-        setData(res.data);
+      if (res.data && Object.hasOwn(res.data, 'pcr')) {
+        const d = res.data;
+        setData(d.data_source !== 'live' ? null : {
+          ...d, call_wall: d.call_oi_wall, put_wall: d.put_oi_wall,
+          total_call_oi: d.total_ce_oi, total_put_oi: d.total_pe_oi,
+          strikes: (d.strikes || []).map((strike, i) => ({ strike, ceOi: Number(d.ce_oi?.[i] || 0), peOi: Number(d.pe_oi?.[i] || 0) })),
+        });
       } else {
         // Fallback to fetch option chain and compute
         const chainRes = await getOptionChain(selectedIndex, 12);
         const chain = chainRes.data?.chain || chainRes.data || [];
-        processChainData(chain);
+        if (chainRes.data?.data_source === 'simulated') setData(null);
+        else processChainData(chain);
       }
     } catch (e) {
       // Fallback: compute from chain or generate realistic stats
@@ -72,7 +78,7 @@ export default function PcrOiPanel({
       }
     });
 
-    const pcr = totalCeOi > 0 ? Number((totalPeOi / totalCeOi).toFixed(2)) : 1.0;
+    const pcr = totalCeOi > 0 ? Number((totalPeOi / totalCeOi).toFixed(2)) : null;
 
     setData({
       symbol: selectedIndex,
@@ -91,7 +97,8 @@ export default function PcrOiPanel({
       const res = await getOptionChain(selectedIndex, 10);
       const chain = res.data?.chain || res.data || [];
       if (chain.length > 0) {
-        processChainData(chain);
+        if (res.data?.data_source === 'simulated') setData(null);
+        else processChainData(chain);
       } else {
         // mock data
         generateMockPcr();
@@ -101,41 +108,14 @@ export default function PcrOiPanel({
     }
   };
 
-  const generateMockPcr = () => {
-    const isBank = selectedIndex === 'BANKNIFTY';
-    const step = isBank ? 100 : 50;
-    const center = isBank ? 50200 : 23500;
-    const mockStrikes = [];
-    let totCe = 0;
-    let totPe = 0;
-
-    for (let i = -7; i <= 7; i++) {
-      const strike = center + i * step;
-      const ce = Math.floor(Math.random() * 800000 + 150000);
-      const pe = Math.floor(Math.random() * 850000 + 150000);
-      totCe += ce;
-      totPe += pe;
-      mockStrikes.push({ strike, ceOi: ce, peOi: pe });
-    }
-
-    setData({
-      symbol: selectedIndex,
-      pcr: Number((totPe / totCe).toFixed(2)),
-      total_call_oi: totCe,
-      total_put_oi: totPe,
-      call_wall: center + 2 * step,
-      put_wall: center - 2 * step,
-      max_pain: center,
-      strikes: mockStrikes,
-    });
-  };
+  const generateMockPcr = () => setData(null); // no fabricated OI
 
   useEffect(() => {
     fetchData();
   }, [selectedIndex]);
 
   const pcrSentiment = useMemo(() => {
-    if (!data || data.pcr == null) return { text: 'Neutral', color: 'text-amber-400' };
+    if (!data || data.pcr == null) return { text: 'Unavailable', color: 'text-amber-400' };
     if (data.pcr >= 1.25) return { text: 'Bullish (High Put Writing)', color: 'text-emerald-400' };
     if (data.pcr >= 1.0) return { text: 'Mildly Bullish', color: 'text-emerald-300' };
     if (data.pcr <= 0.75) return { text: 'Bearish (Heavy Call Writing)', color: 'text-rose-400' };
@@ -191,7 +171,7 @@ export default function PcrOiPanel({
           </div>
           <div className="my-2">
             <div className="text-2xl font-black font-mono text-cyan-400">
-              {data?.pcr != null ? data.pcr.toFixed(2) : '1.00'}
+              {data?.pcr != null ? data.pcr.toFixed(2) : '—'}
             </div>
             <div className={`text-xs font-semibold ${pcrSentiment.color}`}>
               {pcrSentiment.text}

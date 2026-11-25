@@ -188,7 +188,7 @@ async def test_replay_engine():
     assert len(dates) > 0
 
     test_date = dates[0]["date"]
-    started = await replay.start_replay(test_date)
+    started = await replay.start_replay(test_date, owner_id=1)
     assert started.get("status") == "SUCCESS"
 
     state = replay.get_state()

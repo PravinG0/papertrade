@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings
 
 # Locate .env from project root
@@ -47,6 +47,22 @@ class Settings(BaseSettings):
     TIMEZONE: str = Field(default="Asia/Kolkata")
     MARKET_OPEN: str = Field(default="09:15")
     MARKET_CLOSE: str = Field(default="15:30")
+    EXCHANGE_HOLIDAYS: str = Field(default="")
+    EXCHANGE_SPECIAL_SESSIONS: str = Field(default="")
+
+    @field_validator('EXCHANGE_HOLIDAYS')
+    @classmethod
+    def validate_exchange_holidays(cls, value):
+        from session_calendar import parse_holidays
+        parse_holidays(value)
+        return value
+
+    @field_validator('EXCHANGE_SPECIAL_SESSIONS')
+    @classmethod
+    def validate_exchange_special_sessions(cls, value):
+        from session_calendar import parse_special_sessions
+        parse_special_sessions(value)
+        return value
 
     # ── Database & Auth Configuration ────────────────────────────────────
     DATABASE_URL: str = Field(
@@ -83,6 +99,7 @@ class Settings(BaseSettings):
     # ── Testing switch: allow opening trades outside 09:15-15:15 IST (disables auto square-off) ──
     ALLOW_OFFHOURS_TRADING: bool = Field(default=False)
     ALLOW_SIMULATED_TRADING: bool = Field(default=False)
+    ALLOW_SHORT_OPTIONS: bool = Field(default=True)
 
     # ── Scrip Master Cache Path ───────────────────────────────────────────
     SCRIP_CACHE_PATH: str = Field(
@@ -216,24 +233,44 @@ def compute_clamped_sl_target(
     target: float,
     max_loss_inr: float = 700.0,
     max_gain_inr: float = 1000.0,
+    *, quantity: int | None = None,
 ) -> tuple[float, float]:
-    """Clamp stop loss and profit target to institutional risk guardrails (₹700 SL, ₹1000 Tgt)."""
-    spec = get_index_spec(symbol)
-    lot_size = spec.get("lot_size", 25)
+    """Clamp premium distances; actual total units mandatory at execution.
 
-    max_sl_pts = max_loss_inr / lot_size
-    max_tgt_pts = max_gain_inr / lot_size
+    Preview callers may use configured lot size. Gross risk excludes fees/slippage.
+    """
+    from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+    import math
+    qty = quantity if quantity is not None else get_index_spec(symbol)["lot_size"]
+    if isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0:
+        raise ValueError("Positive integer quantity required")
+    if not all(math.isfinite(v) for v in (entry_price, stop_loss, target, max_loss_inr, max_gain_inr)) or min(entry_price, max_loss_inr, max_gain_inr) <= 0:
+        raise ValueError("Invalid risk inputs")
+    entry, sl, tgt, loss, gain = map(lambda v: Decimal(str(v)), (entry_price, stop_loss, target, max_loss_inr, max_gain_inr))
+    tick = Decimal('0.05')
+    ceil = lambda v: (v / tick).to_integral_value(rounding=ROUND_CEILING) * tick
+    floor = lambda v: (v / tick).to_integral_value(rounding=ROUND_FLOOR) * tick
+    lower = ceil(max(tick, entry - loss / qty))
+    upper = floor(entry + gain / qty)
+    sl = ceil(max(lower, sl)) if 0 < sl < entry else lower
+    tgt = floor(min(upper, tgt)) if tgt > entry else upper
+    if not 0 < sl < entry < tgt:
+        raise ValueError("Risk limits cannot accommodate a valid price tick")
+    return float(sl), float(tgt)
 
-    # Clamped SL
-    min_allowed_sl = round(max(1.0, entry_price - max_sl_pts), 2)
-    clamped_sl = round(max(min_allowed_sl, stop_loss), 2)
-    if clamped_sl >= entry_price:
-        clamped_sl = round(max(1.0, entry_price - min(max_sl_pts, 20.0)), 2)
 
-    # Clamped Target
-    max_allowed_target = round(entry_price + max_tgt_pts, 2)
-    clamped_target = round(min(max_allowed_target, target), 2)
-    if clamped_target <= entry_price:
-        clamped_target = round(entry_price + min(max_tgt_pts, 35.0), 2)
+def is_trading_day(now):
+    from session_calendar import parse_holidays, parse_special_sessions, trading_day
+    return trading_day(now, parse_holidays(settings.EXCHANGE_HOLIDAYS), parse_special_sessions(settings.EXCHANGE_SPECIAL_SESSIONS))
 
-    return clamped_sl, clamped_target
+
+def get_session_bounds(now):
+    from session_calendar import parse_holidays, parse_special_sessions, session_bounds
+    return session_bounds(now, parse_holidays(settings.EXCHANGE_HOLIDAYS), parse_special_sessions(settings.EXCHANGE_SPECIAL_SESSIONS))
+
+
+def gemini_candidate_models() -> list[str]:
+    """Ordered Gemini models with one primary retry plus active free-tier failover."""
+    primary = settings.GEMINI_MODEL or "gemini-3.8-flash"
+    unique = list(dict.fromkeys([m for m in (primary, "gemini-3.8-flash", "gemini-3.5-flash-lite") if m]))
+    return [unique[0]] + unique

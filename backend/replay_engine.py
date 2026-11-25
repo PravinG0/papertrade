@@ -71,6 +71,10 @@ class ReplayEngine:
         from angel_service import angel_service
 
         async with self._lock:
+            if owner_id is None or (self.is_replaying and self.owner_id != owner_id):
+                return {"status": "ERROR", "message": "Replay belongs to another account or sign-in required."}
+            if paper_engine.active_positions or paper_engine.active_orders:
+                return {"status": "ERROR", "message": "Close active positions and cancel pending orders before replay."}
             # Stop existing replay if active
             await self._stop_internal()
 
@@ -82,15 +86,18 @@ class ReplayEngine:
                     "message": f"Could not load 1-minute historical candles for {sym_norm} on {date_str}.",
                 }
 
-            self.candles = candles
-            self.total_candles = len(candles)
-            self.candle_index = 0
-            self.date = date_str
-            self.symbol = sym_norm
-            self.owner_id = owner_id
-            self.is_replaying = True
-            self.is_paused = False
-            self.speed = 1.0
+            async with paper_engine._lock:
+                if paper_engine.active_positions or paper_engine.active_orders:
+                    return {"status": "ERROR", "message": "Trading activity changed while loading replay. Retry after closing positions."}
+                self.candles = candles
+                self.total_candles = len(candles)
+                self.candle_index = 0
+                self.date = date_str
+                self.symbol = sym_norm
+                self.owner_id = owner_id
+                self.is_replaying = True
+                self.is_paused = False
+                self.speed = 1.0
 
             # Start background replay loop
             self._task = asyncio.create_task(self._replay_loop())
@@ -133,71 +140,45 @@ class ReplayEngine:
                 await self._broadcast_tick()
 
     async def _broadcast_tick(self) -> None:
-        """Derive option quotes from replayed candle and feed into paper engine."""
-        if not self.candles or self.candle_index >= len(self.candles):
-            return
+        """The UI reads the current candle through replay state and market endpoints.
 
-        candle = self.candles[self.candle_index]
-        spot = candle["close"]
-        spec = INDEX_CONFIG.get(self.symbol, INDEX_CONFIG["NIFTY"])
-        step = spec["strike_step"]
-        atm = int(round(spot / step) * step)
+        Playback-only mode intentionally does not touch the live paper engine.
+        """
+        return None
 
-        # Generate quotes for ±10 strikes around ATM
-        quotes_dict: dict[str, float] = {self.symbol: spot}
-        days_to_expiry = 3.0 / 365.0
-
-        for offset in range(-10, 11):
-            k = atm + (offset * step)
-            ce_p = BlackScholesEngine.calculate_price(spot, k, days_to_expiry, iv=0.15, option_type="CE")
-            pe_p = BlackScholesEngine.calculate_price(spot, k, days_to_expiry, iv=0.15, option_type="PE")
-
-            # Store by strike key
-            quotes_dict[f"{k}CE"] = ce_p
-            quotes_dict[f"{k}PE"] = pe_p
-            quotes_dict[f"{self.symbol}{k}CE"] = ce_p
-            quotes_dict[f"{self.symbol}{k}PE"] = pe_p
-
-        # Update paper trading engine
-        if self.owner_id is not None:
-            await paper_engine.update_market_prices(quotes_dict, replay=True, replay_owner=self.owner_id)
-
-        # Check automated 3:15 PM intraday square-off
-        candle_time = candle.get("time")
-        if candle_time:
-            time_str = datetime.fromtimestamp(candle_time, tz=IST).strftime("%H:%M:%S")
-            if time_str >= "15:15:00" and self.owner_id is not None:
-                for oid, order in list(paper_engine.active_orders.items()):
-                    if order.get("user_id") == self.owner_id:
-                        await paper_engine.cancel_order(oid, user_id=self.owner_id)
-                # The replay clock may only square off the replaying user's own trades
-                await paper_engine.check_intraday_squareoff(time_str, only_user=self.owner_id)
-
-    async def pause(self) -> dict[str, Any]:
+    async def pause(self, owner_id: Optional[int] = None) -> dict[str, Any]:
         """Pause historical replay advancement."""
         async with self._lock:
+            if owner_id is not None and (not self.is_replaying or self.owner_id != owner_id):
+                return {"status": "ERROR", "message": "Replay is not owned by this account."}
             if not self.is_replaying:
                 return {"status": "ERROR", "message": "Replay is not active."}
             self.is_paused = True
             return {"status": "SUCCESS", "state": self.get_state()}
 
-    async def resume(self) -> dict[str, Any]:
+    async def resume(self, owner_id: Optional[int] = None) -> dict[str, Any]:
         """Resume playback."""
         async with self._lock:
+            if owner_id is not None and (not self.is_replaying or self.owner_id != owner_id):
+                return {"status": "ERROR", "message": "Replay is not owned by this account."}
             if not self.is_replaying:
                 return {"status": "ERROR", "message": "Replay is not active."}
             self.is_paused = False
             return {"status": "SUCCESS", "state": self.get_state()}
 
-    async def set_speed(self, speed: float) -> dict[str, Any]:
+    async def set_speed(self, speed: float, owner_id: Optional[int] = None) -> dict[str, Any]:
         """Update playback speed multiplier (e.g. 1.0, 2.0, 5.0, 10.0)."""
         async with self._lock:
+            if owner_id is not None and (not self.is_replaying or self.owner_id != owner_id):
+                return {"status": "ERROR", "message": "Replay is not owned by this account."}
             self.speed = max(0.5, min(20.0, float(speed)))
             return {"status": "SUCCESS", "speed": self.speed, "state": self.get_state()}
 
-    async def step_forward(self) -> dict[str, Any]:
+    async def step_forward(self, owner_id: Optional[int] = None) -> dict[str, Any]:
         """Advance exactly one candle."""
         async with self._lock:
+            if owner_id is not None and (not self.is_replaying or self.owner_id != owner_id):
+                return {"status": "ERROR", "message": "Replay is not owned by this account."}
             if not self.is_replaying:
                 return {"status": "ERROR", "message": "Replay is not active."}
             if self.candle_index < self.total_candles - 1:
@@ -205,9 +186,11 @@ class ReplayEngine:
                 await self._broadcast_tick()
             return {"status": "SUCCESS", "state": self.get_state()}
 
-    async def step_backward(self) -> dict[str, Any]:
+    async def step_backward(self, owner_id: Optional[int] = None) -> dict[str, Any]:
         """Step back one candle."""
         async with self._lock:
+            if owner_id is not None and (not self.is_replaying or self.owner_id != owner_id):
+                return {"status": "ERROR", "message": "Replay is not owned by this account."}
             if not self.is_replaying:
                 return {"status": "ERROR", "message": "Replay is not active."}
             if self.candle_index > 0:
@@ -215,15 +198,16 @@ class ReplayEngine:
                 await self._broadcast_tick()
             return {"status": "SUCCESS", "state": self.get_state()}
 
-    async def stop_replay(self) -> dict[str, Any]:
+    async def stop_replay(self, owner_id: Optional[int] = None) -> dict[str, Any]:
         """Terminate replay mode and return to live market mode."""
         async with self._lock:
+            if owner_id is not None and (not self.is_replaying or self.owner_id != owner_id):
+                return {"status": "ERROR", "message": "Replay is not owned by this account."}
             await self._stop_internal()
             return {"status": "SUCCESS", "message": "Replay stopped.", "state": self.get_state()}
 
     async def _stop_internal(self) -> None:
         """Internal teardown of replay task."""
-        owner = self.owner_id
         self.is_replaying = False
         self.is_paused = False
         self.owner_id = None
@@ -234,11 +218,6 @@ class ReplayEngine:
             except asyncio.CancelledError:
                 pass
             self._task = None
-        if owner is not None:
-            for oid, order in list(paper_engine.active_orders.items()):
-                if order.get("user_id") == owner:
-                    await paper_engine.cancel_order(oid, user_id=owner)
-            await paper_engine.exit_all_positions(reason="REPLAY_STOPPED", user_id=owner)
         self.candles.clear()
         self.candle_index = 0
         self.total_candles = 0

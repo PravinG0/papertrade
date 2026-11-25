@@ -303,10 +303,23 @@ class DebateEngine:
         # Use the broker's actual day-open if the opening candle was unavailable.
         if opening is None and selected.get("open") and float(selected["open"]) != spot:
             opening = float(selected["open"])
+        today_candles = [
+            c for c in candles
+            if c.get("time") is not None and datetime.fromtimestamp(float(c["time"]), IST).date() == now.date()
+        ]
+        session_high = max((float(c["high"]) for c in today_candles), default=None)
+        session_low = min((float(c["low"]) for c in today_candles), default=None)
         tech = _calc_indicators(candles[-60:], spot)
+        if session_high is not None:
+            tech["day_high"] = session_high
+        if session_low is not None:
+            tech["day_low"] = session_low
+        from market_indicators import prior_session_cpr, supertrend
+        tech.update(prior_session_cpr(candles, now) or dict(cpr_pivot=None, cpr_bc=None, cpr_tc=None, cpr_width_type="UNAVAILABLE"))
+        tech.update(supertrend(candles) or dict(supertrend_direction="UNAVAILABLE", supertrend_value=None))
 
         # 3. Option chain feed
-        pcr = 1.05
+        pcr = None
         max_pain = atm_strike
         call_wall = atm_strike + step
         put_wall = atm_strike - step
@@ -318,7 +331,7 @@ class DebateEngine:
             if require_live and (not chain_data or chain_data.get("data_source") != "live"):
                 raise ValueError("Live option chain unavailable; debate skipped.")
             if chain_data:
-                pcr = float(chain_data.get("pcr") or 1.05)
+                pcr = float(chain_data["pcr"]) if chain_data.get("pcr") is not None else None
                 max_pain = float(chain_data.get("max_pain") or atm_strike)
                 call_wall = float(chain_data.get("call_oi_wall") or (atm_strike + (2 * step)))
                 put_wall = float(chain_data.get("put_oi_wall") or (atm_strike - (2 * step)))
@@ -335,8 +348,8 @@ class DebateEngine:
             logger.debug("Option chain metrics extraction skipped: %s", exc)
 
         # 4. Macro sentiment
-        fii = "NET_BUYER" if spot >= tech["ema_20"] and pcr >= 1.0 else ("NET_SELLER" if spot < tech["ema_20"] and pcr < 0.9 else "NEUTRAL")
-        glob = "POSITIVE" if spot >= tech["vwap"] else "NEGATIVE"
+        fii = "UNAVAILABLE"
+        glob = "UNAVAILABLE"
 
         return MarketSnapshot(
             symbol=sym,
@@ -347,8 +360,8 @@ class DebateEngine:
             session_reference=reference,
             rsi=tech["rsi"],
             atr=tech["atr"],
-            vix=float(angel_service.vix or 14.5),
-            pcr=round(pcr, 2),
+            vix=float(angel_service.vix) if angel_service.vix is not None else None,
+            pcr=round(pcr, 2) if pcr is not None else None,
             ce_oi_change=round(ce_oi_change, 0),
             pe_oi_change=round(pe_oi_change, 0),
             higher_tf_trend=tech["trend"],
@@ -366,8 +379,8 @@ class DebateEngine:
             cpr_width_type=tech["cpr_width_type"],
             supertrend_direction=tech["supertrend_direction"],
             supertrend_value=tech["supertrend_value"],
-            advance_decline_ratio=1.25 if spot >= tech["ema_20"] else 0.85,
-            heavyweights_alignment="BULLISH" if spot >= tech["ema_20"] else "BEARISH",
+            advance_decline_ratio=None,
+            heavyweights_alignment="UNAVAILABLE",
             fii_sentiment=fii,
             global_sentiment=glob,
         )
@@ -484,6 +497,10 @@ class DebateEngine:
             raise ValueError("This debate verdict was already executed.")
 
         judge = session.judge
+        if auto and not angel_service.is_configured():
+            raise ValueError("Automatic trading requires a configured live market feed.")
+        if auto and any(agent.analysis_source != "gemini" for agent in (session.bull, session.bear, judge)):
+            raise ValueError("Automatic execution requires successful Gemini analysis from all three agents.")
         verdict = judge.verdict
         if verdict == "NO_TRADE":
             raise ValueError("Judge verdict was NO_TRADE. Capital preservation active.")
@@ -515,6 +532,8 @@ class DebateEngine:
             if rejection:
                 raise ValueError(rejection)
 
+        if lots <= 0 or opt_type not in ("CE", "PE"):
+            raise ValueError("Invalid quantity or option type")
         # ── Live price for the exact contract ────────────────────────────
         quote = await angel_service.get_option_quote(underlying, strike, opt_type)
         if quote:
@@ -542,8 +561,9 @@ class DebateEngine:
                 stop_loss = float(override_payload["stop_loss"])
             if override_payload.get("target"):
                 target = float(override_payload["target"])
-        else:
-            stop_loss, target = compute_clamped_sl_target(underlying, entry_price, stop_loss, target)
+        lot_size = int(quote["lot_size"] if quote else spec["lot_size"])
+        stop_loss, target = compute_clamped_sl_target(
+            underlying, entry_price, stop_loss, target, quantity=lots * lot_size)
 
         order_req = {
             "symbol": order_symbol,
@@ -551,7 +571,7 @@ class DebateEngine:
             "strike": strike,
             "option_type": opt_type,
             "lots": max(1, lots),
-            "lot_size": quote["lot_size"] if quote else spec["lot_size"],
+            "lot_size": lot_size,
             "side": "BUY",
             "order_type": "MARKET",
             "price": entry_price,

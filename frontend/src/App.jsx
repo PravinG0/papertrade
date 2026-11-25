@@ -1,14 +1,11 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import Header from './components/Header';
 import OptionChain from './components/OptionChain';
 import TradingChart from './components/TradingChart';
 import PositionsPanel from './components/PositionsPanel';
 import OrdersPanel from './components/OrdersPanel';
 import ReplayControls from './components/ReplayControls';
-import PcrOiPanel from './components/PcrOiPanel';
-import PnlHeatmap from './components/PnlHeatmap';
 import OrderModal from './components/OrderModal';
-import StrategyPayoff from './components/StrategyPayoff';
 import PositionSizeModal from './components/PositionSizeModal';
 import ShortcutsModal from './components/ShortcutsModal';
 import AuthModal from './components/AuthModal';
@@ -16,7 +13,6 @@ import DebateArena from './components/DebateArena';
 import QuickScalperBar from './components/QuickScalperBar';
 import WelcomeGuide from './components/WelcomeGuide';
 import BottomNav from './components/BottomNav';
-import DailyReportModal from './components/DailyReportModal';
 import { useAuth } from './context/AuthContext';
 import sound from './utils/audio';
 import {
@@ -34,6 +30,14 @@ import {
   exportTradeHistory,
 } from './api';
 import { Activity, Clock, Zap, ChevronDown, ChevronUp, CheckCircle2, AlertTriangle, Info, MessageSquare, History, Download, FileText } from 'lucide-react';
+
+const PcrOiPanel = lazy(() => import('./components/PcrOiPanel'));
+
+const PnlHeatmap = lazy(() => import('./components/PnlHeatmap'));
+
+const StrategyPayoff = lazy(() => import('./components/StrategyPayoff'));
+
+const DailyReportModal = lazy(() => import('./components/DailyReportModal'));
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('terminal'); // 'terminal' | 'oi' | 'pnl'
@@ -56,12 +60,7 @@ export default function App() {
   const [spotPrice, setSpotPrice] = useState(23500);
 
   // Market indices
-  const [indices, setIndices] = useState({
-    NIFTY: { ltp: 24980.50, change: 85.20, change_pct: 0.36 },
-    BANKNIFTY: { ltp: 52140.10, change: 180.45, change_pct: 0.36 },
-    FINNIFTY: { ltp: 24450.00, change: 45.10, change_pct: 0.18 },
-    SENSEX: { ltp: 81650.00, change: 250.00, change_pct: 0.32 },
-  });
+  const [indices, setIndices] = useState({});
 
   // Portfolio & Trading State
   const [portfolio, setPortfolio] = useState({
@@ -90,7 +89,7 @@ export default function App() {
   const [showReplayBar, setShowReplayBar] = useState(false);
   const [showScalper, setShowScalper] = useState(false);
   const positionsRef = useRef(null);
-  const [feedInfo, setFeedInfo] = useState({ source: 'live', marketOpen: true });
+  const [feedInfo, setFeedInfo] = useState({ source: 'stale', marketOpen: false });
 
   // Auth state & context
   const { user, token, loading: authLoading } = useAuth();
@@ -170,10 +169,11 @@ export default function App() {
 
       if (Array.isArray(raw) && raw.length > 0) {
         const sources = raw.map((i) => i?.source).filter(Boolean);
-        const source = sources.includes('simulated') ? 'simulated' : sources.includes('stale') ? 'stale' : 'live';
+        const source = sources.includes('simulated') ? 'simulated' : sources.includes('stale') || sources.length !== raw.length || !sources.every(v => v === 'live') ? 'stale' : 'live';
         setFeedInfo((f) => (f.source === source ? f : { ...f, source }));
       }
 
+      if (!Object.keys(map).length) setFeedInfo(f => ({ ...f, source: 'stale' }));
       if (Object.keys(map).length > 0) {
         setIndices((prev) => ({ ...prev, ...map }));
         if (map[selectedIndex]?.ltp) {
@@ -181,23 +181,8 @@ export default function App() {
         }
       }
     } catch (e) {
-      // Graceful fallback: slightly fluctuate prices for realistic live feel
-      setIndices((prev) => {
-        const deltaNifty = (Math.random() - 0.49) * 2;
-        const deltaBank = (Math.random() - 0.49) * 5;
-        const prevN = prev.NIFTY?.ltp ?? 25380;
-        const prevB = prev.BANKNIFTY?.ltp ?? 62270;
-        const nLtp = Number((prevN + deltaNifty).toFixed(2));
-        const bLtp = Number((prevB + deltaBank).toFixed(2));
-        if (selectedIndex === 'NIFTY') setSpotPrice(nLtp);
-        else if (selectedIndex === 'BANKNIFTY') setSpotPrice(bLtp);
-
-        return {
-          ...prev,
-          NIFTY: { ...(prev.NIFTY || {}), ltp: nLtp },
-          BANKNIFTY: { ...(prev.BANKNIFTY || {}), ltp: bLtp },
-        };
-      });
+      // Preserve last known prices; never present random ticks as market data.
+      setFeedInfo(f => ({ ...f, source: 'stale' }));
     }
   }, [selectedIndex]);
 
@@ -205,12 +190,12 @@ export default function App() {
   const tradingSyncRequest = useRef(null);
   const tradingToken = useRef(token);
   tradingToken.current = token;
-  const syncTradingState = useCallback(async () => {
+  const syncTradingState = useCallback(async ({ lightweight = false } = {}) => {
     if (!token || tradingSyncRequest.current?.token === token) return;
     const request = { token };
     tradingSyncRequest.current = request;
     try {
-      const res = await getTradingState();
+      const res = await getTradingState(lightweight);
       if (tradingToken.current !== token) return;
       const data = res.data || {};
       if (data.portfolio) {
@@ -219,11 +204,13 @@ export default function App() {
       if (Array.isArray(data.positions)) {
         setPositions(data.positions);
       }
-      if (Array.isArray(data.recent_closed_positions)) {
-        setClosedPositions(data.recent_closed_positions);
-      }
-      if (Array.isArray(data.all_trades)) {
-        setAllTrades(data.all_trades);
+      if (!data.history_omitted) {
+        if (Array.isArray(data.recent_closed_positions)) {
+          setClosedPositions(data.recent_closed_positions);
+        }
+        if (Array.isArray(data.all_trades)) {
+          setAllTrades(data.all_trades);
+        }
       }
       if (Array.isArray(data.orders)) {
         setOrders(data.orders);
@@ -323,6 +310,8 @@ export default function App() {
                     };
                   }
                 });
+                const sources = data.indices.map(item => item?.source);
+                setFeedInfo(f => ({ ...f, source: sources.includes('simulated') ? 'simulated' : sources.length && sources.every(v => v === 'live') ? 'live' : 'stale' }));
                 if (Object.keys(map).length > 0) {
                   setIndices((prev) => ({ ...prev, ...map }));
                   const currentSymbol = selectedIndexRef.current;
@@ -400,7 +389,7 @@ export default function App() {
 
     const interval = setInterval(() => {
       syncMarketIndices();
-      syncTradingState();
+      syncTradingState({ lightweight: true });
       syncReplayState();
     }, 4000);
 
@@ -641,6 +630,7 @@ export default function App() {
             </div>
           </div>
         )}
+        {(replayState.is_replaying || replayState.is_active) && <div role="status" className="p-2 text-sm text-amber-700 bg-amber-50 rounded">Historical replay is playback-only until a separate simulation wallet is available.</div>}
         <section id="terminal-panel-trade" role="tabpanel" aria-labelledby="terminal-tab-trade" hidden={activeTab !== 'terminal' || terminalTab !== 'trade'}>
           <WelcomeGuide marketOpen={feedInfo.marketOpen} onOpenDebate={() => openTerminal('chat')} />
           <div className="terminal-grid grid grid-cols-1 lg:grid-cols-12 gap-3 h-auto lg:h-[calc(100vh-235px)] lg:min-h-[660px]">
@@ -795,28 +785,28 @@ export default function App() {
         {/* Tab 2: OI & Greeks Analysis */}
         {activeTab === 'oi' && (
           <div className="max-w-6xl mx-auto">
-            <PcrOiPanel selectedIndex={selectedIndex} spotPrice={spotPrice} />
+            <Suspense fallback={<div className="p-4 text-slate-500">Loading…</div>}><PcrOiPanel selectedIndex={selectedIndex} spotPrice={spotPrice} /></Suspense>
           </div>
         )}
 
         {/* Tab 3: P&L Journal & Calendar Heatmap */}
         {activeTab === 'pnl' && (
           <div className="max-w-6xl mx-auto">
-            <PnlHeatmap />
+            <Suspense fallback={<div className="p-4 text-slate-500">Loading…</div>}><PnlHeatmap /></Suspense>
           </div>
         )}
 
         {/* Tab 4: Strategy Payoff Analyzer */}
         {activeTab === 'payoff' && (
           <div className="max-w-6xl mx-auto">
-            <StrategyPayoff
+            <Suspense fallback={<div className="p-4 text-slate-500">Loading…</div>}><StrategyPayoff
               selectedIndex={selectedIndex}
               spotPrice={spotPrice}
               onExecuteSuccess={() => {
                 syncTradingState();
                 openTerminal('trade');
               }}
-            />
+            /></Suspense>
           </div>
         )}
 
@@ -862,10 +852,10 @@ export default function App() {
       )}
 
       {/* AI Daily Trading Report Modal */}
-      <DailyReportModal
+      <Suspense fallback={<div className="p-4 text-slate-500">Loading…</div>}><DailyReportModal
         isOpen={showDailyReportModal}
         onClose={() => setShowDailyReportModal(false)}
-      />
+      /></Suspense>
 
       {/* Authentication Modal (Sign In / Register) */}
       <AuthModal

@@ -33,7 +33,7 @@ from sqlalchemy import select
 
 from angel_service import angel_service
 from auth import auth_router, decode_access_token, get_current_user, get_optional_user
-from config import INDEX_CONFIG, normalize_index_symbol, settings
+from config import INDEX_CONFIG, get_session_bounds, normalize_index_symbol, settings, is_trading_day
 from database import DailyReportModel, PaperTradeModel, UserModel, async_session_factory, engine, init_db
 from debate_engine import debate_engine
 from agents import daily_report_agent, report_agent
@@ -119,15 +119,11 @@ async def _periodic_mtm_loop() -> None:
     while True:
         try:
             await asyncio.sleep(0.5)
-            # Check 15:15 IST MIS Auto Square-off
-            if not replay_engine.is_replaying:
-                await paper_engine.check_intraday_squareoff()
-
             # Automatic End-of-Day Daily Trading Report generation at 15:30 IST
             now_dt = datetime.now(tz=ZoneInfo("Asia/Kolkata"))
             today_str = now_dt.strftime("%Y-%m-%d")
             time_str = now_dt.strftime("%H:%M:%S")
-            if now_dt.weekday() < 5 and time_str >= "15:30:00" and _last_eod_report_date != today_str:
+            if is_trading_day(now_dt) and time_str >= "15:30:00" and _last_eod_report_date != today_str:
                 _last_eod_report_date = today_str
                 logger.info("Market closed at %s. Triggering automatic Daily Trading Report for %s.", time_str, today_str)
                 asyncio.create_task(_generate_eod_reports(today_str))
@@ -179,6 +175,8 @@ async def _periodic_mtm_loop() -> None:
                             quotes_dict[f"{sym}{k}PE"] = pe_p
 
                 await paper_engine.update_market_prices(quotes_dict)
+                if live_feed or settings.ALLOW_SIMULATED_TRADING:
+                    await paper_engine.check_intraday_squareoff(fresh_quotes=quotes_dict)
 
             # Broadcast real-time market price TICK to all connected WebSockets
             if ws_manager.active_connections:
@@ -398,9 +396,10 @@ async def trigger_manual_keep_alive_ping():
 
 def _is_market_open() -> bool:
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
-    if now.weekday() >= 5:
+    bounds = get_session_bounds(now)
+    if not bounds:
         return False
-    return (now.hour, now.minute) >= (9, 15) and (now.hour, now.minute) < (15, 30)
+    return bounds[0] <= now.time() < bounds[1]
 
 
 @app.get("/api/status")
@@ -414,6 +413,8 @@ async def get_system_status():
         "data_source": angel_service.data_source,
         "vix": angel_service.vix,
         "market_open": _is_market_open(),
+        "exchange_holidays_configured": bool(settings.EXCHANGE_HOLIDAYS.strip()),
+        "allow_short_options": bool(settings.ALLOW_SHORT_OPTIONS),
         "mode": "REPLAY" if replay_state["is_replaying"] else "LIVE",
         "replay_active": replay_state["is_replaying"],
         "virtual_capital": settings.VIRTUAL_STARTING_CAPITAL,
@@ -541,10 +542,13 @@ class PositionExitRequest(BaseModel):
 
 # ── Paper Trading Execution Endpoints ────────────────────────────────────────
 @app.get("/api/trading/state")
-async def get_trading_state(current_user: Optional[UserModel] = Depends(get_current_user)):
+async def get_trading_state(
+    include_history: bool = Query(default=True, description="Include full closed/all trade history arrays"),
+    current_user: Optional[UserModel] = Depends(get_current_user),
+):
     """Return virtual wallet, active positions, pending orders, and P&L."""
     user_id = current_user.id if current_user else None
-    return await paper_engine.get_state(user_id=user_id)
+    return await paper_engine.get_state(user_id=user_id, include_history=include_history)
 
 
 @app.post("/api/trading/order")
@@ -559,21 +563,7 @@ async def place_paper_order(order: OrderCreateRequest, current_user: Optional[Us
     if replay_engine.is_replaying and not replaying_for_me:
         raise HTTPException(status_code=409, detail="Historical replay is active; new live orders are temporarily blocked.")
     if replaying_for_me:
-        order_data["replay"] = True
-        current_tick = replay_engine.get_current_tick()
-        if current_tick:
-            if normalize_index_symbol(order_data["underlying"]) != replay_engine.symbol:
-                raise HTTPException(status_code=400, detail="Order must match the replay index.")
-            if datetime.fromtimestamp(current_tick["time"], tz=ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S") >= "15:15:00":
-                raise HTTPException(status_code=400, detail="Replay entry window is closed.")
-            spot = current_tick["close"]
-            strike = order_data.get("strike", spot)
-            opt_type = order_data.get("option_type", "CE")
-            calc_ltp = BlackScholesEngine.calculate_price(spot, strike, 3.0 / 365.0, iv=0.15, option_type=opt_type)
-            order_data["current_ltp"] = calc_ltp
-            order_data["symbol"] = f"{replay_engine.symbol}{int(strike)}{opt_type}"
-        else:
-            raise HTTPException(status_code=503, detail="Replay price unavailable.")
+        raise HTTPException(status_code=409, detail="Replay playback only: replay trading is paused pending isolated wallet support.")
 
     if not replaying_for_me:
         quote = await angel_service.get_option_quote(
@@ -635,17 +625,11 @@ async def exit_paper_position(
 ):
     """Exit / square off an active paper position at market price or specified limit."""
     user_id = current_user.id if current_user else None
-    # If in replay mode and no price passed, resolve current option price
-    if exit_price is None and replay_engine.is_replaying and user_id is not None and replay_engine.owner_id == user_id:
-        current_tick = replay_engine.get_current_tick()
-        if current_tick:
-            state = await paper_engine.get_state(user_id=user_id)
-            pos = next((p for p in state["positions"] if p["pos_id"] == pos_id), None)
-            if pos:
-                spot = current_tick["close"]
-                strike = pos["strike"]
-                opt_type = pos["option_type"]
-                exit_price = BlackScholesEngine.calculate_price(spot, strike, 3.0 / 365.0, iv=0.15, option_type=opt_type)
+    if replay_engine.is_replaying:
+        raise HTTPException(
+            status_code=409,
+            detail="Replay playback is active; replay synthetic exits are disabled until an isolated ledger is implemented.",
+        )
 
     result = await paper_engine.exit_position(pos_id, exit_price=exit_price, user_id=user_id)
     if result.get("status") == "ERROR":
@@ -719,10 +703,28 @@ async def reset_paper_wallet(current_user: Optional[UserModel] = Depends(get_cur
 
 
 @app.get("/api/trading/history")
-async def get_trading_history(current_user: Optional[UserModel] = Depends(get_current_user)):
-    """Return closed trade history journal."""
+async def get_trading_history(
+    limit: Optional[int] = Query(default=None, ge=1, le=5000),
+    offset: int = Query(default=0, ge=0),
+    from_date: Optional[str] = Query(default=None),
+    to_date: Optional[str] = Query(default=None),
+    status: Optional[str] = Query(default=None),
+    underlying: Optional[str] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+    current_user: Optional[UserModel] = Depends(get_current_user),
+):
+    """Return closed trade history journal with optional server-side filters and pagination."""
     user_id = current_user.id if current_user else None
-    return await paper_engine.get_history(user_id=user_id)
+    return await paper_engine.get_history(
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+        from_date=from_date,
+        to_date=to_date,
+        status_filter=status,
+        underlying=underlying,
+        search=search,
+    )
 
 
 @app.get("/api/trading/all-trades")
@@ -835,22 +837,22 @@ async def control_historical_replay(
     req: ReplayControlRequest, current_user: Optional[UserModel] = Depends(get_current_user)
 ):
     """Control replay playback (pause, resume, speed, step_forward, step_backward, stop)."""
-    _replay_guard(current_user, starting=False)
+    uid = _replay_guard(current_user, starting=False)
     action = req.action.lower()
     if action == "pause":
-        return await replay_engine.pause()
+        return await replay_engine.pause(owner_id=uid)
     elif action in ("resume", "play", "start"):
-        return await replay_engine.resume()
+        return await replay_engine.resume(owner_id=uid)
     elif action == "speed":
         if req.speed is None:
             raise HTTPException(status_code=400, detail="Speed parameter is required for speed control.")
-        return await replay_engine.set_speed(req.speed)
+        return await replay_engine.set_speed(req.speed, owner_id=uid)
     elif action in ("step_forward", "step", "next"):
-        return await replay_engine.step_forward()
+        return await replay_engine.step_forward(owner_id=uid)
     elif action in ("step_backward", "prev", "back"):
-        return await replay_engine.step_backward()
+        return await replay_engine.step_backward(owner_id=uid)
     elif action == "stop":
-        return await replay_engine.stop_replay()
+        return await replay_engine.stop_replay(owner_id=uid)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown action: {req.action}")
 
@@ -886,6 +888,7 @@ async def get_pcr_oi_analytics(
 
     return {
         "symbol": chain_data.get("symbol"),
+        "data_source": chain_data.get("data_source"),
         "spot_price": chain_data.get("spot_price"),
         "atm_strike": chain_data.get("atm_strike"),
         "pcr": chain_data.get("pcr"),

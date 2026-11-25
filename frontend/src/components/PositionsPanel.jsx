@@ -499,7 +499,9 @@ export default function PositionsPanel({
                           <span className="font-bold text-ink">
                             ₹{Number(trade.current_ltp || trade.live_price || trade.entry_price).toFixed(2)}
                           </span>
-                          <div className="text-[9px] text-cyan-600 font-sans uppercase">Live LTP</div>
+                          <div className={`text-[9px] font-sans uppercase ${trade.stale_prior_day || trade.quote_stale ? 'text-amber-600 font-bold' : 'text-cyan-600'}`}>
+                            {trade.stale_prior_day ? 'Prior Session' : trade.quote_stale ? 'Stale Quote' : 'Live LTP'}
+                          </div>
                         </div>
                       ) : (
                         <div>

@@ -20,7 +20,7 @@ from typing import Any, Optional
 from google import genai
 from google.genai import types as genai_types
 
-from config import compute_clamped_sl_target, settings
+from config import compute_clamped_sl_target, gemini_candidate_models, settings
 from adaptive_memory import prompt_with_memory
 from debate_schemas import (
     BearAgentOutput,
@@ -39,8 +39,7 @@ You are evaluating an adversarial debate between a BULL strategist (advocating C
 1. **Capital Preservation First**: Your default verdict is **NO_TRADE**. Only approve a directional trade (BUY CE or BUY PE) when one side demonstrates decisive multi-indicator confluence.
 2. **Cross-Examination**: Verify the Bull and Bear claims against the raw market snapshot numbers (Moving Averages, VWAP, RSI, PCR, CPR, and OI walls). Reject hallucinated or weak claims.
 3. **Institutional Risk Guardrails**:
-   - For NIFTY (Lot: 25): Stop-loss risk must not exceed 28 points (₹700 max loss per lot). Target is 30 to 40 points (₹750 to ₹1000 reward per lot).
-   - For BANK NIFTY (Lot: 15): Stop-loss risk must not exceed 46 points (₹700 max loss per lot). Target is 50 to 66 points (₹750 to ₹1000 reward per lot).
+   - Propose a valid positive stop-loss below entry and target above entry. Actual fill uses broker lot size and total quantity; the backend clamps gross stop risk to ₹700 and target gain to ₹1000 before fees and gaps.
    - Option premium estimate: ATM premium is roughly 0.5% to 0.7% of spot (or ~₹90 - ₹160 for Nifty, ~₹200 - ₹350 for Bank Nifty).
 4. **Decisive Verdict**:
    - "BUY CE" when bullish confluence is dominant (e.g. spot > EMA20, PCR > 1.0, Put writing heavy).
@@ -89,13 +88,7 @@ class JudgeAgent:
         user_prompt = self._build_prompt(snapshot, bull, bear)
         user_prompt += f"\nSession open: {snapshot.day_open}; session price reference: {snapshot.session_reference}. If not VWAP, do not call it true VWAP."
 
-        models_to_try = [
-            settings.GEMINI_MODEL,
-            "gemini-3.8-flash",
-        ]
-        models_to_try = list(dict.fromkeys([m for m in models_to_try if m]))
-        # Gemini returns transient 503 'high demand' spikes: try the model twice before falling back
-        models_to_try = models_to_try * 2
+        models_to_try = gemini_candidate_models()
 
         if self._client:
             for model_name in models_to_try:
@@ -123,14 +116,14 @@ class JudgeAgent:
                     data = json.loads(raw_text)
                     output = self._parse_and_guardrail(data, snapshot)
                     logger.info("JudgeAgent rendered verdict: %s (model=%s)", output.verdict, model_name)
-                    return output
+                    return output.model_copy(update={"analysis_source": "gemini"})
                 except Exception as exc:
                     logger.warning("JudgeAgent attempt with %s failed: %s", model_name, exc)
                     continue
 
         # Fallback when LLM is unavailable
         logger.info("JudgeAgent utilizing institutional quantitative fallback")
-        return self._fallback_output(snapshot, bull, bear)
+        return self._fallback_output(snapshot, bull, bear).model_copy(update={"analysis_source": "fallback"})
 
     def _build_prompt(
         self,
@@ -143,7 +136,7 @@ class JudgeAgent:
             f"=== 1. MARKET GROUND TRUTH ===\n"
             f"Spot Price: {s.spot_price:.2f} | ATM Strike: {s.atm_strike:.0f}\n"
             f"EMA-20: {s.ema_20:.2f} | EMA-50: {s.ema_50:.2f} | VWAP: {s.vwap:.2f}\n"
-            f"RSI: {s.rsi:.2f} | VIX: {s.vix:.2f} | PCR: {s.pcr:.2f}\n"
+            f"RSI: {s.rsi:.2f} | VIX: {format(s.vix, '.2f') if s.vix is not None else 'UNAVAILABLE'} | PCR: {format(s.pcr, '.2f') if s.pcr is not None else 'UNAVAILABLE'}\n"
             f"CE OI Change: {s.ce_oi_change:+,.0f} | PE OI Change: {s.pe_oi_change:+,.0f}\n"
             f"Higher TF Trend: {s.higher_tf_trend} | CPR Regime: {s.cpr_width_type}\n"
             f"Call OI Wall: {s.call_oi_wall or 'N/A'} | Put OI Wall: {s.put_oi_wall or 'N/A'}\n\n"
@@ -158,45 +151,34 @@ class JudgeAgent:
         )
 
     def _parse_and_guardrail(self, data: dict[str, Any], snapshot: MarketSnapshot) -> JudgeAgentOutput:
-        raw_v = str(data.get("verdict") or "NO_TRADE").upper().replace("_", " ")
-        if "CE" in raw_v or "CALL" in raw_v:
-            verdict = "BUY CE"
-        elif "PE" in raw_v or "PUT" in raw_v:
-            verdict = "BUY PE"
-        else:
-            verdict = "NO_TRADE"
-
-        confidence = int(data.get("confidence") or 6)
-        strike_val = float(data.get("recommended_strike") or snapshot.atm_strike)
-        entry = float(data.get("entry_price") or 0.0)
-        sl = float(data.get("stop_loss") or 0.0)
-        tgt = float(data.get("target") or 0.0)
-
-        # Baseline entry price if model returned 0 or missing
-        is_bank = "BANK" in snapshot.symbol.upper()
-        default_entry = 240.0 if is_bank else 125.0
-        if verdict != "NO_TRADE" and entry <= 0:
-            entry = default_entry
-        if verdict != "NO_TRADE" and sl <= 0:
-            sl = entry - (35.0 if is_bank else 20.0)
-        if verdict != "NO_TRADE" and tgt <= 0:
-            tgt = entry + (50.0 if is_bank else 30.0)
+        from verdict_validation import validated_verdict
+        verdict, confidence, strike_val, entry, sl, tgt = validated_verdict(data)
+        data = data if isinstance(data, dict) else {}
 
         # Apply strict ₹700 Max SL and ₹1000 Max Target clamp
         if verdict != "NO_TRADE" and entry > 0:
-            sl, tgt = compute_clamped_sl_target(
-                symbol=snapshot.symbol,
-                entry_price=entry,
-                stop_loss=sl,
-                target=tgt,
-                max_loss_inr=700.0,
-                max_gain_inr=1000.0,
-            )
-            risk = max(1.0, entry - sl)
-            reward = max(1.0, tgt - entry)
-            rr_val = round(reward / risk, 2)
-            rr_str = f"1:{rr_val}"
-            selected_strike = f"{int(strike_val)}{'CE' if verdict == 'BUY CE' else 'PE'}"
+            try:
+                sl, tgt = compute_clamped_sl_target(
+                    symbol=snapshot.symbol,
+                    entry_price=entry,
+                    stop_loss=sl,
+                    target=tgt,
+                    max_loss_inr=700.0,
+                    max_gain_inr=1000.0,
+                )
+            except ValueError as exc:
+                verdict = "NO_TRADE"
+                strike_val, entry, sl, tgt = 0.0, 0.0, 0.0, 0.0
+                rr_val = 0.0
+                rr_str = "N/A"
+                selected_strike = None
+                data = {**data, "reasoning": f"Risk guardrail rejected trade geometry ({exc}). " + str(data.get("reasoning") or "")}
+            else:
+                risk = entry - sl
+                reward = tgt - entry
+                rr_val = round(reward / risk, 2)
+                rr_str = f"1:{rr_val}"
+                selected_strike = f"{int(strike_val)}{'CE' if verdict == 'BUY CE' else 'PE'}"
         else:
             entry, sl, tgt = 0.0, 0.0, 0.0
             rr_val = 0.0
@@ -204,7 +186,7 @@ class JudgeAgent:
             selected_strike = None
 
         reasoning = str(data.get("reasoning") or "Institutional risk evaluation complete.")
-        key_risks = list(data.get("key_risks") or ["Intraday volatility expansion", "Theta decay"])
+        key_risks = [str(v) for v in data.get("key_risks", [])] if isinstance(data.get("key_risks"), list) else []
         risk_warning = "; ".join(key_risks) if key_risks else "Manage risk strictly."
 
         return JudgeAgentOutput(

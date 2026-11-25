@@ -16,7 +16,7 @@ from typing import Any, Optional
 from google import genai
 from google.genai import types as genai_types
 
-from config import settings
+from config import gemini_candidate_models, settings
 from adaptive_memory import prompt_with_memory
 from debate_schemas import BullAgentOutput, MarketSnapshot
 
@@ -84,14 +84,7 @@ class BullAgent:
         user_prompt = self._build_prompt(snapshot)
         user_prompt += f"\nSession open: {snapshot.day_open}; session price reference: {snapshot.session_reference}. If not VWAP, do not call it true VWAP."
 
-        models_to_try = [
-            settings.GEMINI_MODEL,
-            "gemini-3.8-flash",
-        ]
-        # Remove duplicates while preserving order
-        models_to_try = list(dict.fromkeys([m for m in models_to_try if m]))
-        # Gemini returns transient 503 'high demand' spikes: try the model twice before falling back
-        models_to_try = models_to_try * 2
+        models_to_try = gemini_candidate_models()
 
         if self._client:
             for model_name in models_to_try:
@@ -128,14 +121,14 @@ class BullAgent:
                         key_levels=dict(data.get("key_levels") or {}),
                     )
                     logger.info("BullAgent generated output with %s: confidence=%d, strike=%.1f", model_name, output.confidence, output.strike)
-                    return output
+                    return output.model_copy(update={"analysis_source": "gemini"})
                 except Exception as exc:
                     logger.warning("BullAgent attempt with %s failed: %s", model_name, exc)
                     continue
 
         # Fallback when LLM is unavailable
         logger.info("BullAgent utilizing institutional mathematical fallback")
-        return self._fallback_output(snapshot)
+        return self._fallback_output(snapshot).model_copy(update={"analysis_source": "fallback"})
 
     def _build_prompt(self, s: MarketSnapshot) -> str:
         return (
@@ -147,8 +140,8 @@ class BullAgent:
             f"VWAP: {s.vwap:.2f}\n"
             f"RSI (14): {s.rsi:.2f}\n"
             f"ATR (14): {s.atr:.2f}\n"
-            f"India VIX: {s.vix:.2f}\n"
-            f"PCR: {s.pcr:.2f}\n"
+            f"India VIX: {format(s.vix, '.2f') if s.vix is not None else 'UNAVAILABLE'}\n"
+            f"PCR: {format(s.pcr, '.2f') if s.pcr is not None else 'UNAVAILABLE'}\n"
             f"CE OI Change: {s.ce_oi_change:+,.0f} | PE OI Change: {s.pe_oi_change:+,.0f}\n"
             f"Higher TF Trend: {s.higher_tf_trend}\n"
             f"Max Pain: {s.max_pain or 'N/A'}\n"
@@ -160,7 +153,7 @@ class BullAgent:
 
     def _fallback_output(self, s: MarketSnapshot) -> BullAgentOutput:
         strike_val = float(s.atm_strike)
-        confidence = 7 if s.spot_price >= s.ema_20 and s.pcr >= 0.95 else 5
+        confidence = 7 if s.spot_price >= s.ema_20 and s.pcr is not None and s.pcr >= 0.95 else 5
         return BullAgentOutput(
             bias="BULLISH",
             confidence=confidence,
@@ -169,8 +162,8 @@ class BullAgent:
             arguments=[
                 f"Trend Alignment: Spot (₹{s.spot_price:.2f}) is positioned above short-term support with EMA-20 at ₹{s.ema_20:.2f} providing active dynamic demand.",
                 f"VWAP & Order Flow: Price action relative to VWAP (₹{s.vwap:.2f}) indicates buyer absorption on dips and refusal to break intraday value.",
-                f"Option Chain & PCR: Put-Call Ratio of {s.pcr:.2f} with strong Put writing (+{s.pe_oi_change:+,.0f} PE OI) establishes a fortified institutional floor at {strike_val:.0f}.",
-                f"Volatility & Greeks: India VIX at {s.vix:.1f} maintains manageable implied volatility, providing favorable delta expansion for ATM CE calls against intraday theta.",
+                f"Option Chain & PCR: Put-Call Ratio of {format(s.pcr, '.2f') if s.pcr is not None else 'UNAVAILABLE'} with strong Put writing (+{s.pe_oi_change:+,.0f} PE OI) establishes a fortified institutional floor at {strike_val:.0f}.",
+                f"Volatility & Greeks: India VIX at {format(s.vix, '.1f') if s.vix is not None else 'UNAVAILABLE'} maintains manageable implied volatility, providing favorable delta expansion for ATM CE calls against intraday theta.",
             ],
             recommended_strike=f"{int(strike_val)}CE",
             key_levels={
