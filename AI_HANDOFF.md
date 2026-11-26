@@ -48,3 +48,11 @@ Preserve production `.env` privately (never commit). Optional V5 config defaults
 
 - **Deploy:** Push verified changes directly to `origin/main` (Render auto-deploys backend; Vercel auto-deploys frontend).
 - **Rollback:** `git checkout backup-pre-v5-hybrid-56ddbfb` (or `git revert <commit>`) and push to `main`. No database rollback needed since no schema migration was added.
+
+## 7. `pravin_g` Wallet Reconciliation Audit (27 November 2026)
+
+- **Account:** `username = pravin_g`, `user_id = 1`, `portfolio_id = 10` (`reset_baseline_present = false`, `active_count = 0`, `pending_count = 0`).
+- **Ledger Verification:** All `90` `paper_trades` are `CLOSED` (`53` `STOP_LOSS_HIT`, `34` `TARGET_HIT`, `3` `AUTO_SQUAREOFF_315PM`; all `BUY`), `gross_pnl - total_charges == realized_pnl` across all 90 rows (`0` arithmetic discrepancies), total `realized_pnl = -₹8,390.23`.
+- **Root Cause of `-₹36,564.37` Discrepancy:** Pre-QA-fix carryover on Portfolio `id=10`: on 25 Nov 2026 (`85` closed trades, `Trade P&L = -₹9,748.44`), `stored_cash` was `₹9,53,687.19` (`+₹7,970.38` cash surplus) alongside `₹44,534.75` of phantom orphan `margin_used` from earlier pre-lock settlement races. On 26 Nov 2026, `5` trades closed (`+₹1,358.21` net `realized_pnl`, bringing `Trade P&L` to `-₹8,390.23` and `stored_cash` to `₹9,55,045.40`), and `margin_used` was synced to actual open positions (`₹0.00`), turning `+₹7,970.38 - ₹44,534.75` into `-₹36,564.37`.
+- **Source-Code Status:** Current `paper_engine.py` uses atomic `_lock_portfolio` + `_settle_position` and passed all accounting/concurrency tests; no new source-code bug was introduced on 26 Nov (`+₹1,358.21` cash delta matched `5` Nov 26 trades to the paisa).
+- **`reconcile_wallet.py --user-id 1` Preview:** `initial_capital = 1000000.0`, `expected_cash = 991609.77`, `stored_cash = 955045.4`, `cash_adjustment = +36564.37`, `margin_adjustment = 0.0`, `issues = []`. Pending explicit user approval before `--apply`.
