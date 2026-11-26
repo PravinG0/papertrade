@@ -30,7 +30,7 @@ Preserve production `.env` privately (never commit). Optional V5 config defaults
 ## 4. Verification Results (26 November 2026)
 
 - **Python syntax (`py_compile`):** **PASS** across all backend modules, agents, and tests.
-- **Backend `pytest`:** **299 passed, 1 skipped** (`test_ml_research_pipeline_on_synthetic_fixture` skipped because optional `scikit-learn` research dependency is not installed in runtime environment) using isolated temporary SQLite DBs.
+- **Backend `pytest`:** **303 passed, 1 skipped** (`test_ml_research_pipeline_on_synthetic_fixture` skipped because optional `scikit-learn` research dependency is not installed in runtime environment) using isolated temporary SQLite DBs.
 - **Frontend JS (`node --test tests/*.test.js`):** **28 passed, 0 failed**.
 - **Frontend Production Build (`npm run build`):** **PASS** (`1,598` modules, main `414.49 kB`, charts `173.56 kB`).
 - **Live SmartAPI 5-Interval Verification (read-only after market close, `_candle_min_interval = 0.65s`):**
