@@ -59,6 +59,9 @@ class MarketSnapshot(BaseModel):
     heavyweights_alignment: Optional[str] = "BULLISH"
     fii_sentiment: Optional[str] = "NEUTRAL"
     global_sentiment: Optional[str] = "POSITIVE"
+    data_status: str = Field(default="unknown", description="live, cached, stale, simulated, or unavailable")
+    last_candle_ist: Optional[str] = Field(default=None, description="Timestamp of last validated candle in IST")
+    candle_count: int = Field(default=0, description="Number of validated candles used for indicators")
 
 
 class BullAgentOutput(BaseModel):

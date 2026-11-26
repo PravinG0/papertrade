@@ -604,7 +604,7 @@ export default function App() {
         {activeTab === 'terminal' && (
           <div className="terminal-nav mb-4 bg-white border border-slate-200 rounded-2xl p-2 sm:p-3 shadow-sm">
             <div className="flex items-center justify-between gap-2 px-2 pb-2">
-              <h1 className="text-base sm:text-lg font-bold text-slate-900">Terminal</h1>
+              <h1 className="text-base sm:text-lg font-bold text-ink">Terminal</h1>
               <span className="text-[10px] font-semibold uppercase tracking-wider text-cyan-700 bg-cyan-50 rounded-full px-2 py-1">Paper trading</span>
             </div>
             <div role="tablist" aria-label="Terminal views" className="grid grid-cols-3 gap-1 bg-[#eef1f6] p-1 rounded-xl" onKeyDown={(event) => {

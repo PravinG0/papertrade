@@ -295,9 +295,23 @@ class DebateEngine:
         atm_strike = float(round(spot / step) * step)
 
         # 2. Candlestick feed (5-minute interval)
-        candles = await angel_service.get_candles(sym, interval="5m", range_period="5d")
-        if not candles:
-            raise ValueError(f"Historical candle data for {sym} is unavailable; debate skipped.")
+        candle_meta = await angel_service.get_candles_with_meta(sym, interval="5m", range_period="5d")
+        candles = candle_meta.get("candles") or []
+        candle_source = str(candle_meta.get("source") or "unavailable")
+        last_candle_ist = candle_meta.get("last_candle_ist")
+        candle_reason = candle_meta.get("reason")
+
+        if not candles or candle_source == "unavailable":
+            raise ValueError(candle_reason or f"Historical candle data for {sym} is unavailable; debate skipped.")
+        if require_live and candle_source in ("stale", "simulated"):
+            raise ValueError(
+                candle_reason
+                or f"Historical candle data for {sym} is {candle_source}; debate skipped to avoid stale or simulated data."
+            )
+        if len(candles) < 20:
+            raise ValueError(
+                f"Insufficient historical candles for {sym} ({len(candles)} received, minimum 20 required for EMA/RSI/ATR/VWAP)."
+            )
         now = datetime.now(IST)
         opening, session_vwap, reference = session_price_reference(candles, now)
         # Use the broker's actual day-open if the opening candle was unavailable.
@@ -383,6 +397,9 @@ class DebateEngine:
             heavyweights_alignment="UNAVAILABLE",
             fii_sentiment=fii,
             global_sentiment=glob,
+            data_status=candle_source,
+            last_candle_ist=last_candle_ist,
+            candle_count=len(candles),
         )
 
     async def run_debate(self, symbol: str = "NIFTY", user_id: Optional[int] = None) -> DebateSession:
@@ -528,6 +545,10 @@ class DebateEngine:
         evidence_snapshot = session.market_snapshot
         if auto:
             evidence_snapshot = await self.build_snapshot(underlying)
+            if getattr(evidence_snapshot, "data_status", "unknown") not in ("live", "cached"):
+                raise ValueError(
+                    f"Automatic execution blocked: market candle feed for {underlying} is {evidence_snapshot.data_status}."
+                )
             rejection = trend_rejection(evidence_snapshot.model_dump(), opt_type, settings.AUTO_TREND_THRESHOLD_PCT)
             if rejection:
                 raise ValueError(rejection)

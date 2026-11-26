@@ -52,11 +52,17 @@ Preserve `.env` privately (never commit). Optional new keys in `.env.example`:
 
 ## 5. Verification Baseline (26 November 2026)
 
-- Python syntax check (`py_compile` all source & test files): **PASS**
-- Full backend `pytest`: **237 passed, 0 failed** (34.04s) using isolated temp SQLite DB
-- Frontend `node --test tests/*.test.js`: **28 passed, 0 failed** (209ms)
-- Frontend `npm run build`: **PASS** (1,598 modules, 8.06s, main `409.25 kB`, charts `173.56 kB`, zero oversized chunk warnings)
-- Controlled read-only live checks: Angel One SmartAPI login & spot/VIX (`live`, `VIX=17.67`) **PASS**; Gemini `gemini-3.8-flash` hit daily Free Tier `429` (`20/day`), `gemini-3.5-flash-lite` responded `OK`.
+- Python syntax check (`py_compile` all modified backend files): **PASS**
+- Full backend `pytest`: **248 passed, 0 failed** (35.23s) using isolated temp SQLite DB (includes `tests/test_candle_resilience.py`: SmartAPI token renewal on `401`/`AG8001`/`AG8002`/`AG8003`, `403`/`429` `Retry-After` cooldown, network timeout retries, OHLC/monotonic validation, singleflight deduplication, interval-aware cache + incremental tail merge, stale/insufficient candle gating)
+- Frontend `node --test tests/*.test.js`: **28 passed, 0 failed**
+- Frontend `npm run build`: **PASS** (1,598 modules, 8.19s, main `411.83 kB`, charts `173.56 kB`)
+- Controlled read-only live checks: Angel One SmartAPI historical candle endpoint (`NIFTY` `99926000` and `BANKNIFTY` `99926009`, `5m`, `5d`) **PASS** (`220` candles each).
+
+## 6. Historical Candle Resilience & Debate UI Hardening (26 November 2026)
+
+- **`backend/angel_service.py`**: Added shared `_candle_lock` rate-limiting (`0.45s` min interval), concurrent singleflight deduplication (`_candle_inflight`), interval-aware TTL (`30s` 1m, `45s` 5m, `120s` 15m, `300s` 1D), bounded retries with exponential backoff/jitter, `Retry-After` & rate-limit cooldown tracking, automatic token renewal (`401`/`AG8001`/`AG8002`/`AG8003` with `force_refresh=True`), HTTP + JSON `status` validation, OHLC/monotonic timestamp validation, incremental tail fetch + merge, `_last_valid_candles` fallback marked `source="stale"`, and `get_candles_with_meta()`.
+- **`backend/debate_engine.py` & `backend/debate_schemas.py` & `backend/main.py`**: `MarketSnapshot` now exposes `data_status`, `last_candle_ist`, and `candle_count`; `DebateEngine.build_snapshot()` validates `live`/`cached` status and minimum `20` candles (blocking `stale`/`simulated`/`unavailable` data and auto-trading on stale data); `/api/debate/run` maps `ValueError` to HTTP `503` with actionable detail.
+- **`frontend/src/components/DebateArena.jsx` & `frontend/src/App.jsx`**: Added `LIVE DATA` / `CACHED DATA` / `STALE DATA` / `UNAVAILABLE` badge, `Last candle` IST timestamp, `CURRENT DEBATE INDICATORS` vs `PREVIOUS DEBATE INDICATORS` label, actionable error banner with controlled `Retry` button and 4s rapid-click cooldown, and fixed low-contrast light-theme text in Terminal heading and Adaptive Learning Memory panel (`text-ink` / `text-slate-300`).
 
 ## 6. Known Limitations & Operator Actions Remaining
 
