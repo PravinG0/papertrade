@@ -953,7 +953,7 @@ export default function DebateArena({
           <MarketMatrixBar
             snapshot={snapshot}
             isArchived={Boolean(archivedDebate)}
-            debateTimestamp={activeDebate?.timestamp}
+            debateTimestamp={debate?.timestamp}
           />
 
           {debate.quantitative_validation && (
