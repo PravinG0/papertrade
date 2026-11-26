@@ -81,7 +81,7 @@ class AngelService:
         # Historical candle rate-limiting, deduplication, and cooldown state
         self._candle_lock = asyncio.Lock()
         self._last_candle_ts: float = 0.0
-        self._candle_min_interval: float = 0.45
+        self._candle_min_interval: float = 0.65
         self._candle_cooldown_until: float = 0.0
         self._candle_inflight: dict[str, asyncio.Task] = {}
 
@@ -368,6 +368,7 @@ class AngelService:
                 "net_change": round(net_chg, 2),
                 "percent_change": round(pct_chg, 2),
                 "timestamp": datetime.now(tz=IST).isoformat(),
+                "exchange_timestamp": (exchange_time.isoformat() if (exchange_time := self._parse_exchange_quote_time(item)) else None),
                 "source": "live",
             }
             quotes_by_sym[sym_key] = entry
@@ -490,7 +491,7 @@ class AngelService:
                 continue
             if o_f <= 0 or h_f <= 0 or l_f <= 0 or c_f <= 0 or v_f < 0:
                 continue
-            if h_f < l_f:
+            if h_f < max(o_f, c_f) or l_f > min(o_f, c_f):
                 continue
 
             parsed.append({
@@ -594,16 +595,16 @@ class AngelService:
         if cache_key in self._candle_cache:
             c_time, c_candles = self._candle_cache[cache_key]
             age = max(0.0, now - c_time)
-            if age < ttl and c_candles:
-                _, _, last_ist, _ = self._assess_candle_freshness(c_candles, angel_interval)
+            if age < ttl and c_candles and cache_key in self._last_valid_candles:
+                fresh, _, last_ist, reason = self._assess_candle_freshness(c_candles, angel_interval)
                 return {
                     "candles": [c.copy() for c in c_candles],
-                    "source": "cached",
+                    "source": ("cached" if fresh else "stale") if self.is_configured() else "simulated",
                     "last_candle_ist": last_ist,
                     "cached_age_seconds": round(age, 1),
-                    "error": None,
-                    "error_code": None,
-                    "reason": None,
+                    "error": reason,
+                    "error_code": None if fresh else "STALE_CANDLES",
+                    "reason": reason,
                 }
 
         self._ensure_loop()
@@ -672,7 +673,6 @@ class AngelService:
             if contract is not None:
                 return _stale_or_unavailable("Angel One credentials are not configured for option candles.")
             fallback = self._generate_fallback_candles(sym_norm, interval=interval, count=80)
-            self._candle_cache[cache_key] = (time.time(), fallback)
             _, _, last_ist, _ = self._assess_candle_freshness(fallback, angel_interval)
             return {
                 "candles": fallback,

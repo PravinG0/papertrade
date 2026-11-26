@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, func, or_
 from adaptive_memory import IST, build_memory, execution_rejection, object_json, trend_rejection
 from config import settings
+from quant_engine import calibration_summary
 from database import (DailyReportModel, PaperTradeModel, DebateRecordModel,
                       AITradeEvidenceModel, async_session_factory)
 
@@ -34,9 +35,17 @@ async def retrieve_memory(user_id, snapshot, now=None):
             if evidence and evidence.user_id == user_id:
                 t['entry_snapshot'] = object_json(evidence.snapshot)
                 t['judge_confidence'] = evidence.confidence
+                t['verified_quant'] = bool(evidence.auto_executed and t['entry_snapshot'].get('quant_version') == 'quant-v1')
             trades.append(t)
+    from adaptive_memory import parse_time, summarize_trades
+    eligible = [t for t in trades if t.get('verified_quant') and t.get('exit_reason') not in ('WALLET_RESET','REPLAY_STOPPED') and (end := parse_time(t.get('closed_at'))) and end <= now]
+    days = sorted({parse_time(t['closed_at']).date() for t in eligible if parse_time(t['closed_at']).date()<now.date()}, reverse=True)[:settings.MEMORY_EXTENDED_DAYS]
+    extended = [t for t in eligible if parse_time(t['closed_at']).date() in days]
+    calibration = calibration_summary([dict(verified=True, confidence=t.get('judge_confidence'), net_pnl=t.get('realized_pnl')) for t in extended])
     return build_memory(report_data, trades, snapshot, now, settings.MEMORY_SHORT_DAYS,
-                        settings.MEMORY_LONG_DAYS, settings.AUTO_TREND_THRESHOLD_PCT)
+                        settings.MEMORY_LONG_DAYS, settings.AUTO_TREND_THRESHOLD_PCT) + (
+        '\nExtended verified quantitative-fill memory (up to 90 observed prior trading dates; bounded database sample): '
+        + summarize_trades(extended) + '\nObserved confidence bands (not predicted probabilities): ' + str(calibration))
 
 
 async def guard_auto_fill(db, user_id, order, now=None):

@@ -1,72 +1,50 @@
 # TradeLab / PaperTrade — AI Developer Handoff
 
-**Current Revision:** QA Remediation, Merge & Hardening (`tradelab_qa_repaired` + post-merge QA hardening), 26 November 2026.  
-**Base:** Production `main` (`52a8419`, tag `backup-pre-qa-repaired-52a8419`) merged with `tradelab_qa_repaired.zip`.  
-**Read alongside:** `PRODUCTION_MERGE_REPORT.md`, `FINAL_QA_REPORT.md`, `DATABASE_MIGRATION_REPORT.md`, `DATA_PRESERVATION_REPORT.md`, `WALLET_RECONCILIATION_PREVIEW.md`, `DEPLOYMENT_REPORT.md`, `ADAPTIVE_LEARNING_CHANGES.md`, `WALLET_RECONCILIATION.md`.
+**Current Revision:** TradeLab V5 Hybrid Quantitative AI Engine (`tradelab_v5_hybrid` merged onto production `56ddbfb`, Git backup tag `backup-pre-v5-hybrid-56ddbfb`), 26 November 2026.  
+**Read alongside:** `V5_HYBRID_ENGINE.md`, `PRODUCTION_MERGE_REPORT.md`, `FINAL_QA_REPORT.md`, `DATA_PRESERVATION_REPORT.md`, `DEPLOYMENT_REPORT.md`, `DATABASE_MIGRATION_REPORT.md`, `WALLET_RECONCILIATION.md`.
 
 ---
 
-## 1. Architecture & Technology Stack
+## 1. Architecture & V5 Hybrid Stack
 
-- **Frontend:** React 18, Vite 5.4, TailwindCSS, Axios, `lightweight-charts` (split into `charts` chunk; `PcrOiPanel`, `PnlHeatmap`, `StrategyPayoff`, `DailyReportModal` lazy-loaded via `Suspense`).
-- **Backend:** FastAPI, SQLAlchemy 2.0 AsyncIO (`aiosqlite` for local/tests, `asyncpg` + Supabase pooler port `6543` for production), Pydantic v2, Google `genai` SDK, Angel One SmartAPI REST + `pyotp` (paper-trading only; zero broker order routing).
-- **Primary Endpoints:**
-  - Health & Status: `/api/health`, `/api/status` (includes `exchange_holidays_configured`, `allow_short_options`, `data_source`)
-  - Market Data: `/api/indices`, `/api/candles`, `/api/expiries`, `/api/option-chain`, `/api/analytics/pcr-oi`, `/api/analytics/payoff`
-  - Paper Trading: `/api/trading/state` (`?include_history=true|false`), `/api/trading/order`, `/api/trading/order/{id}/cancel`, `/api/trading/position/{id}/exit`, `/api/trading/position/{id}/stoploss`, `/api/trading/exit-all`, `/api/trading/reset`, `/api/trading/history` (paginated & server-filtered), `/api/trading/all-trades`, `/api/trading/export`
-  - AI & Scheduler: `/api/debate/run`, `/api/debate/latest`, `/api/debate/history`, `/api/debate/{id}/execute`, `/api/scheduler/start`, `/api/scheduler/stop`, `/api/scheduler/status`
-  - Reports & Replay: `/api/reports/daily`, `/api/reports/daily/generate`, `/api/reports/dates`, `/api/reports/daily/export`, `/api/replay/start`, `/api/replay/control`, `/api/replay/state`
-  - Auth & WS: `/api/auth/*`, `/ws/terminal` (owner-scoped `ORDER_UPDATE`)
+- **Frontend:** React 18, Vite 5.4, TailwindCSS (inverted light palette; dark text uses `text-ink` / `text-slate-300`), Axios, `lightweight-charts`. [`DebateArena.jsx`](file:///home/pravin/Documents/Trading/papertrade/frontend/src/components/DebateArena.jsx) includes the **Quantitative Validation** panel (original AI proposal vs deterministic filter verdict, 5-timeframe status grid, regime, spot freshness, option preview spread/net R:R/model delta, execution recheck), Market Matrix data-status/IST timestamp bar, controlled Retry with 4s cooldown, and Adaptive Learning Memory panel.
+- **Backend:** FastAPI, SQLAlchemy 2.0 AsyncIO (`aiosqlite` for local/tests, `asyncpg` + Supabase PostgreSQL pooler for production), Pydantic v2, Google `genai` SDK, Angel One SmartAPI REST + `pyotp` (paper-trading only; zero broker order routing).
+- **V5 Quantitative & Research Modules:**
+  - [`backend/quant_engine.py`](file:///home/pravin/Documents/Trading/papertrade/backend/quant_engine.py): deterministic completed-bar validation (`expected_starts`, `validated_bars` requiring 50 consecutive valid candles, up to 200 warm-up), EMA20/50ATR separation, regime detection (`market_regime`), directional alignment (`validate_direction`), two-sided option spread/fee-adjusted net R:R (`option_validation`), Black-Scholes midpoint Greeks estimate (`estimate_option_greeks`), full-session reference check (`complete_session_reference`), and empirical confidence band summary (`calibration_summary`).
+  - [`backend/research_backtest.py`](file:///home/pravin/Documents/Trading/papertrade/backend/research_backtest.py) & [`backend/research_ml.py`](file:///home/pravin/Documents/Trading/papertrade/backend/research_ml.py): offline-only Champion vs Challenger backtester and chronological purged-label ML calibration pipeline (`requirements-research.txt`). Never used by live or automatic trading.
 
-## 2. Database Schema & Non-Destructive Migrations
+## 2. Database Schema & Existing Data Preservation
 
-- Tables in [`backend/database.py`](file:///home/pravin/Documents/Trading/papertrade/backend/database.py):
-  - `users`, `portfolios`, `paper_trades`, `pending_paper_orders`, `debate_sessions`, `debate_records`, `ai_trade_evidence`, `daily_reports`, `app_kv`, plus `schema_migrations` added by [`backend/migrations.py`](file:///home/pravin/Documents/Trading/papertrade/backend/migrations.py).
-- **Migrations:** `init_db()` invokes `apply_additive_migrations()` using SQLAlchemy `inspect()` for both SQLite and PostgreSQL (only additive `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN`, and `CREATE INDEX IF NOT EXISTS`). Supports `SKIP_DB_INIT=true` and CLI `--dry-run` / `--apply`.
+- **No V5 schema/column migration required:** V5 metadata (`timeframes`, `market_regime`, `quantitative_validation`, `execution_validation`, `original_judge_verdict`, `quant_version: "quant-v1"`) is stored inside existing `debate_records.payload` and `ai_trade_evidence.snapshot` JSON fields.
+- **Backward Compatibility & Preservation:** Legacy debate payloads deserialize cleanly with defaults; pre-V5 trades remain untouched and are **never** relabeled as `verified_quant`; existing user accounts, wallet balances, open/closed trades, pending orders, daily reports, and adaptive memory are 100% preserved.
 
-## 3. Trading, Risk, AI Agents & Memory Workflows
+## 3. Environment Variables
 
-1. **Adaptive Learning Loop** (`adaptive_memory.py`, `adaptive_store.py`):
-   - Retrieves intraday closed P&L, 5-day completed DailyReport lessons (with future revision protection `updated > now` and intraday `<15:30` exclusion), 30-day statistics, and comparable market regime win/loss stats strictly scoped by `user_id` and excluding `WALLET_RESET` and `REPLAY_STOPPED`.
-   - Injected into Bull, Bear, Judge prompts via `prompt_with_memory()` (marking reports untrusted evidence).
-2. **Deterministic Backend Guardrails**:
-   - Decimal `0.05`-tick clamping via `compute_clamped_sl_target(..., quantity=lots * lot_size)`.
-   - Strict verdict parser (`verdict_validation.py`): only `BUY CE`, `BUY PE`, `NO_TRADE` with finite positive prices & integer confidence `1..10`; infeasible tick geometry downgrades to `NO_TRADE`.
-   - `analysis_source` tracking (`gemini`, `fallback`, `unknown`): `auto_execute` fails closed if any of Bull/Bear/Judge is non-Gemini or Angel feed is unconfigured. UI shows badges & fallback warning notice.
-   - `guard_auto_fill`: max daily auto fills (`AUTO_MAX_DAILY_TRADES=5`), repeat-strike SL cooldown (`AUTO_REPEAT_STRIKE_COOLDOWN_MINUTES=30`), single active position per index, atomic `ai_trade_evidence` per debate ID, symmetric `trend_rejection` (`AUTO_TREND_THRESHOLD_PCT=0.75`).
-   - `DebateScheduler._claim_slot` records durable slot claims in `app_kv` (`scheduler-slot:<uid>:<sym>`) to block duplicate runs across restarts.
-3. **Wallet Settlement & Concurrency** (`paper_engine.py`, `wallet_accounting.py`):
-   - Single transactional `_settle_position` under `_lock_portfolio` row update lock; `reset_portfolio` uses `_lock_portfolio`; `_get_or_create_portfolio` handles `IntegrityError` races.
-   - `update_market_prices` syncs DB `stop_loss` & `target` from persisted row before trigger evaluation (prevents stale worker trigger).
-   - `check_intraday_squareoff` requires `is_trading_day(now)` and current-cycle fresh quotes; defers unpriced contracts cleanly; `get_state` surfaces `stale_prior_day` & `quote_stale`.
-   - `ALLOW_SHORT_OPTIONS` allows toggling off short SELL options when broker clearing/SPAN margin API is unavailable.
-4. **Exchange Calendar & Replay Isolation**:
-   - `session_calendar.py` supports `EXCHANGE_HOLIDAYS` and `EXCHANGE_SPECIAL_SESSIONS` across status, entry window, square-off, and scheduler.
-   - Historical Replay is strictly **playback-only**: orders and exits during replay return HTTP 409 / `REJECTED` so live capital and learning memory stay isolated.
+Preserve production `.env` privately (never commit). Optional V5 config defaults in `.env.example`:
+- `MEMORY_EXTENDED_DAYS=90`
+- `QUANT_MIN_CONFIDENCE=8`
+- `QUANT_MIN_NET_RR=1.5`
+- `QUANT_MAX_SPREAD_PCT=2.0`
+- `QUANT_MAX_VERDICT_AGE_SECONDS=180`
 
-## 4. Environment Variables
+## 4. Verification Results (26 November 2026)
 
-Preserve `.env` privately (never commit). Optional new keys in `.env.example`:
-- `EXCHANGE_HOLIDAYS`, `EXCHANGE_SPECIAL_SESSIONS`, `ALLOW_SHORT_OPTIONS`, `SKIP_DB_INIT`.
-- Gemini failover order (`gemini_candidate_models()` in `config.py`): `[settings.GEMINI_MODEL, "gemini-3.8-flash", "gemini-3.5-flash-lite"]`.
+- **Python syntax (`py_compile`):** **PASS** across all backend modules, agents, and tests.
+- **Backend `pytest`:** **299 passed, 1 skipped** (`test_ml_research_pipeline_on_synthetic_fixture` skipped because optional `scikit-learn` research dependency is not installed in runtime environment) using isolated temporary SQLite DBs.
+- **Frontend JS (`node --test tests/*.test.js`):** **28 passed, 0 failed**.
+- **Frontend Production Build (`npm run build`):** **PASS** (`1,598` modules, main `414.49 kB`, charts `173.56 kB`).
+- **Live SmartAPI 5-Interval Verification (read-only after market close, `_candle_min_interval = 0.65s`):**
+  - `NIFTY` & `BANKNIFTY` across `1m` (`1092`), `5m` (`220`), `15m` (`275`), `1h` (`149`), `1d` (`247`) all returned `HTTP 200`, `source=live`, zero `403` rate-limit errors.
+  - Note on `quant_engine.validated_bars()` strictness: during post-close testing on `2026-11-26`, `15m` passed (`50` bars, `BULLISH`), while `1m`/`5m` reflected a real SmartAPI 5-minute feed gap at `15:15–15:19 IST` and `1h`/`1d` reflected `2026-11-24` (Guru Nanak Jayanti) not being configured in `EXCHANGE_HOLIDAYS`. Keeping strict validation intact ensures the engine fails closed (`NO_TRADE`) when broker bars or holiday calendars are incomplete.
 
-## 5. Verification Baseline (26 November 2026)
+## 5. Known Limitations & Remaining Operator/Future Work
 
-- Python syntax check (`py_compile` all modified backend files): **PASS**
-- Full backend `pytest`: **248 passed, 0 failed** (35.23s) using isolated temp SQLite DB (includes `tests/test_candle_resilience.py`: SmartAPI token renewal on `401`/`AG8001`/`AG8002`/`AG8003`, `403`/`429` `Retry-After` cooldown, network timeout retries, OHLC/monotonic validation, singleflight deduplication, interval-aware cache + incremental tail merge, stale/insufficient candle gating)
-- Frontend `node --test tests/*.test.js`: **28 passed, 0 failed**
-- Frontend `npm run build`: **PASS** (1,598 modules, 8.19s, main `411.83 kB`, charts `173.56 kB`)
-- Controlled read-only live checks: Angel One SmartAPI historical candle endpoint (`NIFTY` `99926000` and `BANKNIFTY` `99926009`, `5m`, `5d`) **PASS** (`220` candles each).
+1. **Exchange Holiday Configuration:** Configure `EXCHANGE_HOLIDAYS` in Render env vars so `quant_engine.expected_starts()` does not expect bars on NSE holidays.
+2. **Live Market Session Testing:** Live bid/ask spread validation, bar-boundary transitions, and auto-execution during active market hours (`09:15–15:30 IST`) remain pending until the next live market session. Keep `auto_execute` disabled until live-session validation passes.
+3. **Single Backend Worker:** Historical candle rate limiting (`_candle_lock`) and scheduler slots are process-local; keep a single Render worker active.
+4. **Offline Research Only:** `research_backtest.py` and `research_ml.py` require an operator-supplied historical options JSON dataset (`provenance: "historical_contract_ohlc"`) and `requirements-research.txt`; no ML model is deployed in production.
 
-## 6. Historical Candle Resilience & Debate UI Hardening (26 November 2026)
+## 6. Deployment & Rollback
 
-- **`backend/angel_service.py`**: Added shared `_candle_lock` rate-limiting (`0.45s` min interval), concurrent singleflight deduplication (`_candle_inflight`), interval-aware TTL (`30s` 1m, `45s` 5m, `120s` 15m, `300s` 1D), bounded retries with exponential backoff/jitter, `Retry-After` & rate-limit cooldown tracking, automatic token renewal (`401`/`AG8001`/`AG8002`/`AG8003` with `force_refresh=True`), HTTP + JSON `status` validation, OHLC/monotonic timestamp validation, incremental tail fetch + merge, `_last_valid_candles` fallback marked `source="stale"`, and `get_candles_with_meta()`.
-- **`backend/debate_engine.py` & `backend/debate_schemas.py` & `backend/main.py`**: `MarketSnapshot` now exposes `data_status`, `last_candle_ist`, and `candle_count`; `DebateEngine.build_snapshot()` validates `live`/`cached` status and minimum `20` candles (blocking `stale`/`simulated`/`unavailable` data and auto-trading on stale data); `/api/debate/run` maps `ValueError` to HTTP `503` with actionable detail.
-- **`frontend/src/components/DebateArena.jsx` & `frontend/src/App.jsx`**: Added `LIVE DATA` / `CACHED DATA` / `STALE DATA` / `UNAVAILABLE` badge, `Last candle` IST timestamp, `CURRENT DEBATE INDICATORS` vs `PREVIOUS DEBATE INDICATORS` label, actionable error banner with controlled `Retry` button and 4s rapid-click cooldown, and fixed low-contrast light-theme text in Terminal heading and Adaptive Learning Memory panel (`text-ink` / `text-slate-300`).
-
-## 6. Known Limitations & Operator Actions Remaining
-
-1. **Duplicate Render Instance**: Both `papertrade-1-uv24.onrender.com` and `papertrade-s9fq.onrender.com` were active against Supabase PostgreSQL. Keep only one backend service & single worker active until distributed leader leasing is implemented.
-2. **Supabase Production DB Audit / Reconciliation**: Production `DATABASE_URL` lives on Render. Take a Supabase backup, run `migrations.py --dry-run` and `reconcile_wallet.py --user-id <ID>` read-only first, and approve any wallet correction explicitly.
-3. **Browser E2E Layout Verification**: Playwright/Chrome not installed locally; test desktop/tablet/mobile viewports (320px–1440px) in browser after Vercel deploy.
-4. **External Feeds**: FII/DII, global sentiment, breadth, official NSE holiday auto-sync, and broker SPAN short-margin APIs remain unintegrated (marked `UNAVAILABLE` / disclosed clearly).
+- **Deploy:** Push verified changes directly to `origin/main` (Render auto-deploys backend; Vercel auto-deploys frontend).
+- **Rollback:** `git checkout backup-pre-v5-hybrid-56ddbfb` (or `git revert <commit>`) and push to `main`. No database rollback needed since no schema migration was added.

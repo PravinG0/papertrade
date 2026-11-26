@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     # Adaptive paper-trading memory and hard risk rules
     MEMORY_SHORT_DAYS: int = Field(default=5, ge=1, le=30)
     MEMORY_LONG_DAYS: int = Field(default=30, ge=5, le=90)
+    MEMORY_EXTENDED_DAYS: int = Field(default=90, ge=30, le=90)
+    QUANT_MIN_CONFIDENCE: int = Field(default=8, ge=1, le=10)
+    QUANT_MIN_NET_RR: float = Field(default=1.5, gt=0, le=10)
+    QUANT_MAX_SPREAD_PCT: float = Field(default=2.0, gt=0, le=20)
+    QUANT_MAX_VERDICT_AGE_SECONDS: int = Field(default=180, ge=30, le=600)
     AUTO_MAX_DAILY_TRADES: int = Field(default=5, ge=1, le=100)
     AUTO_REPEAT_STRIKE_COOLDOWN_MINUTES: int = Field(default=30, ge=1, le=1440)
     AUTO_TREND_THRESHOLD_PCT: float = Field(default=0.75, gt=0, le=10)

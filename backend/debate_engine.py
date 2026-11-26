@@ -36,7 +36,10 @@ from paper_engine import paper_engine
 from database import DebateRecordModel, PaperTradeModel, async_session_factory
 from sqlalchemy import select
 from config import compute_clamped_sl_target
-from adaptive_memory import session_price_reference, trend_rejection
+from adaptive_memory import session_price_reference, trend_rejection, parse_time
+from quant_engine import validated_bars, frame_features, market_regime, validate_direction, option_validation, expected_starts
+from config import get_session_bounds
+from paper_engine import calculate_trade_charges
 from adaptive_store import retrieve_memory
 
 logger = logging.getLogger("debate_engine")
@@ -288,7 +291,7 @@ class DebateEngine:
         if require_live and selected.get("source") != "live":
             raise ValueError(f"Live spot price unavailable for {sym}; debate skipped.")
         spot = float(selected.get("ltp") or 0)
-        if spot <= 0:
+        if not 0 < spot < float("inf"):
             raise ValueError(f"Invalid spot price for {sym}.")
 
         # ATM Strike
@@ -308,11 +311,28 @@ class DebateEngine:
                 candle_reason
                 or f"Historical candle data for {sym} is {candle_source}; debate skipped to avoid stale or simulated data."
             )
-        if len(candles) < 20:
+        if len(candles) < 50:
             raise ValueError(
-                f"Insufficient historical candles for {sym} ({len(candles)} received, minimum 20 required for EMA/RSI/ATR/VWAP)."
+                f"Insufficient historical candles for {sym} ({len(candles)} received, minimum 50 required for EMA50/RSI/ATR/VWAP)."
             )
         now = datetime.now(IST)
+        # Pin the data cutoff across all timeframes. Ignore still-forming candles.
+        frames = {}
+        frame_rows = {}
+        if require_live:
+            candles = validated_bars(candles, now, '5m', get_session_bounds)
+            frames['5m'] = frame_features(candles)
+            frame_rows['5m'] = candles
+            for frame, span in (('1d','1y'), ('1h','30d'), ('15m','15d'), ('1m','5d')):
+                meta = await angel_service.get_candles_with_meta(sym, interval=frame, range_period=span)
+                if meta.get('source') not in ('live','cached'):
+                    frames[frame] = {'direction':'UNKNOWN','reason':meta.get('reason') or 'Broker data unavailable'}
+                    continue
+                try:
+                    frame_rows[frame] = meta.get('candles') or []
+                    frames[frame] = frame_features(validated_bars(frame_rows[frame], now, frame, get_session_bounds))
+                except ValueError as exc:
+                    frames[frame] = {'direction':'UNKNOWN','reason':str(exc)}
         opening, session_vwap, reference = session_price_reference(candles, now)
         # Use the broker's actual day-open if the opening candle was unavailable.
         if opening is None and selected.get("open") and float(selected["open"]) != spot:
@@ -323,7 +343,7 @@ class DebateEngine:
         ]
         session_high = max((float(c["high"]) for c in today_candles), default=None)
         session_low = min((float(c["low"]) for c in today_candles), default=None)
-        tech = _calc_indicators(candles[-60:], spot)
+        tech = _calc_indicators(candles[-200:], spot)
         if session_high is not None:
             tech["day_high"] = session_high
         if session_low is not None:
@@ -339,12 +359,17 @@ class DebateEngine:
         put_wall = atm_strike - step
         ce_oi_change = 0.0
         pe_oi_change = 0.0
+        option_expiry = None
+        chain_spot = None
 
         try:
             chain_data = await angel_service.get_option_chain(sym, strikes_count=12)
             if require_live and (not chain_data or chain_data.get("data_source") != "live"):
                 raise ValueError("Live option chain unavailable; debate skipped.")
             if chain_data:
+                option_expiry = (chain_data.get("expiry") or {}).get("date")
+                chain_spot = chain_data.get("spot_price")
+                atm_strike = float(chain_data.get("atm_strike") or atm_strike)
                 pcr = float(chain_data["pcr"]) if chain_data.get("pcr") is not None else None
                 max_pain = float(chain_data.get("max_pain") or atm_strike)
                 call_wall = float(chain_data.get("call_oi_wall") or (atm_strike + (2 * step)))
@@ -365,6 +390,34 @@ class DebateEngine:
         fii = "UNAVAILABLE"
         glob = "UNAVAILABLE"
 
+        # Refresh spot after potentially slow historical retrieval. Require an exchange timestamp.
+        if require_live:
+            refreshed = await angel_service.get_spot_indices()
+            selected = next((s for s in refreshed if s.get('symbol') == sym), {})
+            spot = float(selected.get('ltp') or 0)
+            if selected.get('source') != 'live' or not 0 < spot < float('inf'):
+                raise ValueError('Live spot quote unavailable after candle retrieval.')
+        spot_stamp = parse_time(selected.get('exchange_timestamp'))
+        observed_at = datetime.now(IST)
+        spot_fresh = bool(spot_stamp and 0 <= (observed_at-spot_stamp).total_seconds() <= 30 and selected.get('source')=='live')
+        if require_live:
+            # A slow request crossing a bar boundary cannot claim current analysis.
+            candles = validated_bars(candles, observed_at, '5m', get_session_bounds)
+            last_candle_ist = datetime.fromtimestamp(candles[-1]['time'], IST).strftime('%Y-%m-%d %H:%M IST')
+            for frame, rows in frame_rows.items():
+                try:
+                    frames[frame] = frame_features(validated_bars(rows, observed_at, frame, get_session_bounds))
+                except ValueError as exc:
+                    frames[frame] = {'direction':'UNKNOWN','reason':str(exc)}
+            if chain_spot and abs(spot-float(chain_spot)) > step:
+                raise ValueError('Spot moved materially during option-chain collection; retry.')
+            # A session reference must cover every completed candle since session open.
+            from quant_engine import complete_session_reference
+            opening, session_vwap, reference = complete_session_reference(candles, observed_at, get_session_bounds)
+            from market_indicators import prior_session_cpr
+            tech.update(prior_session_cpr(candles, observed_at) or dict(cpr_pivot=None,cpr_bc=None,cpr_tc=None,cpr_width_type='UNAVAILABLE'))
+        bounds = get_session_bounds(observed_at)
+        session_active = bool(bounds and bounds[0] <= observed_at.time() < bounds[1])
         return MarketSnapshot(
             symbol=sym,
             spot_price=round(spot, 2),
@@ -378,7 +431,7 @@ class DebateEngine:
             pcr=round(pcr, 2) if pcr is not None else None,
             ce_oi_change=round(ce_oi_change, 0),
             pe_oi_change=round(pe_oi_change, 0),
-            higher_tf_trend=tech["trend"],
+            higher_tf_trend=frames.get("1h", {}).get("direction", "UNKNOWN"),
             timestamp=ist_now_str(),
             atm_strike=atm_strike,
             day_high=tech.get("day_high", spot + tech["atr"]),
@@ -400,6 +453,8 @@ class DebateEngine:
             data_status=candle_source,
             last_candle_ist=last_candle_ist,
             candle_count=len(candles),
+            timeframes=frames, market_regime=market_regime(frames), spot_fresh=spot_fresh, session_active=session_active,
+            spot_exchange_timestamp=selected.get("exchange_timestamp"), option_expiry=option_expiry,
         )
 
     async def run_debate(self, symbol: str = "NIFTY", user_id: Optional[int] = None) -> DebateSession:
@@ -423,11 +478,66 @@ class DebateEngine:
 
         # 3. Run Judge Agent evaluation with cross-examination
         judge_output = await self.judge_agent.evaluate(snapshot, bull_output, bear_output, memory=memory)
+        original_verdict = judge_output.verdict
+        original_proposal = judge_output.model_dump(mode="json")
+        original_proposal["available_at"] = datetime.now(IST).isoformat()
+        quantitative = validate_direction(snapshot.model_dump(), original_verdict, judge_output.confidence, settings.QUANT_MIN_CONFIDENCE)
+        if any(agent.analysis_source != 'gemini' for agent in (bull_output, bear_output, judge_output)):
+            quantitative['eligible'] = False
+            quantitative['reasons'].append('All three agents must complete Gemini analysis.')
+        if quantitative['eligible']:
+            try:
+                snapshot_at = parse_time(snapshot.timestamp)
+                if not snapshot_at or not 0 <= (datetime.now(IST)-snapshot_at).total_seconds() <= settings.QUANT_MAX_VERDICT_AGE_SECONDS:
+                    raise ValueError('Market snapshot expired during AI analysis.')
+                if not snapshot.option_expiry:
+                    raise ValueError('Missing option expiry.')
+                opt_type = original_verdict[-2:]
+                strike = float(judge_output.recommended_strike)
+                step = get_index_spec(sym)['strike_step']
+                if strike <= 0 or strike % step != 0:
+                    raise ValueError('Judge strike is not a valid strike increment.')
+                preview_quote = await angel_service.get_option_quote(sym, strike, opt_type, expiry=snapshot.option_expiry)
+                if not preview_quote:
+                    raise ValueError('Exact option quote unavailable.')
+                if preview_quote.get('expiry') != snapshot.option_expiry:
+                    raise ValueError('Exact expiry mismatch.')
+                entry = float(preview_quote['ask'])
+                # Judge percentages are preserved, then clamped using the real contract units.
+                if not 0 < judge_output.stop_loss < judge_output.entry_price < judge_output.target:
+                    raise ValueError('Judge risk geometry invalid.')
+                sl, target = compute_clamped_sl_target(sym, entry,
+                    entry * judge_output.stop_loss / judge_output.entry_price,
+                    entry * judge_output.target / judge_output.entry_price,
+                    quantity=int(preview_quote['lot_size']))
+                opt_check = option_validation(preview_quote, entry, sl, target, int(preview_quote['lot_size']),
+                    datetime.now(IST), lambda buy,sell: calculate_trade_charges(buy,sell,underlying=sym)['total_charges'],
+                    settings.QUANT_MIN_NET_RR, settings.QUANT_MAX_SPREAD_PCT)
+                from quant_engine import estimate_option_greeks
+                opt_check['greeks_estimate'] = estimate_option_greeks(snapshot.spot_price, strike, opt_type,
+                    snapshot.option_expiry, preview_quote, datetime.now(IST))
+                opt_check['one_lot_preview'] = {'entry':entry,'stop':sl,'target':target,'quantity':preview_quote['lot_size'],
+                    'symbol':preview_quote['symbol'],'expiry':snapshot.option_expiry,'exchange_timestamp':preview_quote.get('exchange_timestamp')}
+                quantitative['option'] = opt_check
+                if not opt_check['eligible']:
+                    quantitative['eligible'] = False
+                    quantitative['reasons'].extend(opt_check['reasons'])
+            except (ValueError, TypeError, KeyError, OverflowError) as exc:
+                quantitative['eligible'] = False
+                quantitative['reasons'].append('Option validation: ' + str(exc))
+        if original_verdict in ('BUY CE','BUY PE') and not quantitative['eligible']:
+            reason = 'Quantitative filter: ' + ' '.join(quantitative['reasons'])
+            judge_output = judge_output.model_copy(update={
+                'verdict':'NO_TRADE', 'recommended_strike':0., 'selected_strike':None,
+                'entry_price':0., 'stop_loss':0., 'target':0., 'risk_reward_ratio':'N/A',
+                'risk_warning':reason, 'reasoning':reason+' Original AI reasoning: '+judge_output.reasoning})
         if judge_output.verdict in ("BUY CE", "BUY PE"):
             rejection = trend_rejection(snapshot.model_dump(), judge_output.verdict[-2:], settings.AUTO_TREND_THRESHOLD_PCT)
             # A genuine counter-trend verdict becomes NO_TRADE. Unknown data is
             # flagged here and fails closed at automatic execution.
             if rejection and snapshot.day_open and snapshot.session_reference != "UNKNOWN":
+                quantitative["eligible"] = False
+                quantitative["reasons"].append(rejection)
                 judge_output = judge_output.model_copy(update={
                     "verdict": "NO_TRADE", "recommended_strike": 0.0, "selected_strike": None,
                     "entry_price": 0.0, "stop_loss": 0.0, "target": 0.0,
@@ -449,6 +559,7 @@ class DebateEngine:
             judge=judge_output,
             executed=False,
             episodic_memory=memory,
+            original_judge_verdict=original_verdict, original_judge_proposal=original_proposal, quantitative_validation=quantitative,
             order_id=None,
             user_id=user_id,
         )
@@ -518,6 +629,14 @@ class DebateEngine:
             raise ValueError("Automatic trading requires a configured live market feed.")
         if auto and any(agent.analysis_source != "gemini" for agent in (session.bull, session.bear, judge)):
             raise ValueError("Automatic execution requires successful Gemini analysis from all three agents.")
+        if auto:
+            if override_payload:
+                raise ValueError('Automatic trades cannot override the validated AI contract or risk limits.')
+            stamp = parse_time(session.market_snapshot.timestamp)
+            if not stamp or not 0 <= (datetime.now(IST)-stamp).total_seconds() <= settings.QUANT_MAX_VERDICT_AGE_SECONDS:
+                raise ValueError('AI verdict expired; run a new debate.')
+            if not session.quantitative_validation or not session.quantitative_validation.get('eligible'):
+                raise ValueError('Automatic execution requires a new quantitative-validated debate.')
         verdict = judge.verdict
         if verdict == "NO_TRADE":
             raise ValueError("Judge verdict was NO_TRADE. Capital preservation active.")
@@ -549,6 +668,11 @@ class DebateEngine:
                 raise ValueError(
                     f"Automatic execution blocked: market candle feed for {underlying} is {evidence_snapshot.data_status}."
                 )
+            current_quant = validate_direction(evidence_snapshot.model_dump(), verdict, judge.confidence, settings.QUANT_MIN_CONFIDENCE)
+            if not current_quant['eligible']:
+                raise ValueError('Execution revalidation: ' + ' '.join(current_quant['reasons']))
+            if not session.market_snapshot.option_expiry or evidence_snapshot.option_expiry != session.market_snapshot.option_expiry:
+                raise ValueError('Option expiry changed or unavailable; run a new debate.')
             rejection = trend_rejection(evidence_snapshot.model_dump(), opt_type, settings.AUTO_TREND_THRESHOLD_PCT)
             if rejection:
                 raise ValueError(rejection)
@@ -556,9 +680,13 @@ class DebateEngine:
         if lots <= 0 or opt_type not in ("CE", "PE"):
             raise ValueError("Invalid quantity or option type")
         # ── Live price for the exact contract ────────────────────────────
-        quote = await angel_service.get_option_quote(underlying, strike, opt_type)
+        quote = await angel_service.get_option_quote(underlying, strike, opt_type, expiry=session.market_snapshot.option_expiry)
         if quote:
-            entry_price = quote["ltp"]
+            if auto and quote.get("expiry") != session.market_snapshot.option_expiry:
+                raise ValueError("Exact expiry mismatch during execution.")
+            entry_price = quote.get("ask") if auto else quote["ltp"]
+            if not entry_price or not 0 < float(entry_price) < float("inf"):
+                raise ValueError("Valid executable option ask required.")
             order_symbol = quote["symbol"]
         elif angel_service.is_configured() or not settings.ALLOW_SIMULATED_TRADING:
             raise ValueError(f"Live price for {underlying} {int(strike)} {opt_type} is unavailable; trade not executed.")
@@ -586,6 +714,18 @@ class DebateEngine:
         stop_loss, target = compute_clamped_sl_target(
             underlying, entry_price, stop_loss, target, quantity=lots * lot_size)
 
+        if auto:
+            opt_check = option_validation(quote or {}, entry_price, stop_loss, target, lots*lot_size,
+                datetime.now(IST), lambda buy,sell: calculate_trade_charges(buy,sell,underlying=underlying)['total_charges'],
+                settings.QUANT_MIN_NET_RR, settings.QUANT_MAX_SPREAD_PCT)
+            opt_check["quote_exchange_timestamp"] = quote.get("exchange_timestamp") if quote else None
+            opt_check["validated_at"] = datetime.now(IST).isoformat()
+            session.execution_validation = opt_check
+            if not opt_check['eligible']:
+                await self._persist(session)
+                raise ValueError('Option validation: ' + ' '.join(opt_check['reasons']))
+            if (datetime.now(IST)-stamp).total_seconds() > settings.QUANT_MAX_VERDICT_AGE_SECONDS:
+                raise ValueError('AI verdict expired during execution validation.')
         order_req = {
             "symbol": order_symbol,
             "underlying": underlying,
@@ -603,7 +743,7 @@ class DebateEngine:
 
         order_res = await paper_engine.place_order(order_req, user_id=user_id, ai_evidence={
             "debate_id": session.id, "auto_executed": auto,
-            "snapshot": evidence_snapshot.model_dump(mode="json"), "confidence": judge.confidence,
+            "snapshot": {**evidence_snapshot.model_dump(mode="json"), "quant_version":"quant-v1", "execution_validation":session.execution_validation} if auto else evidence_snapshot.model_dump(mode="json"), "confidence": judge.confidence,
         })
         if order_res.get("status") != "EXECUTED" or not order_res.get("position_id"):
             raise ValueError(order_res.get("reject_reason") or order_res.get("message") or "Order did not open a position.")

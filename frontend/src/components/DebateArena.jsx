@@ -956,6 +956,30 @@ export default function DebateArena({
             debateTimestamp={activeDebate?.timestamp}
           />
 
+          {debate.quantitative_validation && (
+            <details open className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 sm:p-4 text-ink shadow-sm">
+              <summary className="cursor-pointer text-sm font-bold text-ink">Quantitative validation · {debate.quantitative_validation.eligible ? 'Direction & option checks passed' : 'NO TRADE / blocked'}</summary>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
+                <span>AI proposal: <strong className="text-ink">{debate.original_judge_verdict || judge.verdict}</strong></span>
+                <span>· Regime: <strong className="text-ink">{snapshot.market_regime || 'UNKNOWN'}</strong></span>
+                <span>· {snapshot.spot_fresh ? 'Fresh exchange spot' : 'Spot freshness unverified'}</span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                {['1d','1h','15m','5m','1m'].map(frame => {
+                  const f = snapshot.timeframes?.[frame];
+                  return <div key={frame} className="min-w-0 rounded-lg border border-slate-200 p-2 text-xs" title={f?.reason || 'Completed candle analysis'}>
+                    <div className="font-semibold text-slate-300">{frame}</div>
+                    <div className={'mt-1 break-words font-bold ' + (f?.direction === 'BULLISH' ? 'text-emerald-700' : f?.direction === 'BEARISH' ? 'text-rose-700' : 'text-slate-300')}>{f?.direction || 'UNKNOWN'}</div>
+                    <div className="mt-1 text-slate-400">{f?.count ?? 0} bars</div>
+                  </div>;
+                })}
+              </div>
+              {!!debate.quantitative_validation.reasons?.length && <ul className="mt-3 space-y-1 text-xs text-amber-800">{debate.quantitative_validation.reasons.map((r,i) => <li key={i}>• {r}</li>)}</ul>}
+              {debate.quantitative_validation.option && <div className="mt-3 text-xs text-slate-300">One-lot preview · Spread {debate.quantitative_validation.option.metrics?.spread_pct ?? 'N/A'}% · Net reward/risk {debate.quantitative_validation.option.metrics?.net_rr ?? 'N/A'} · Model delta {debate.quantitative_validation.option.greeks_estimate?.delta ?? 'N/A'}</div>}
+              {debate.execution_validation && <div className="mt-2 text-xs text-slate-300">Execution recheck · {debate.execution_validation.eligible ? 'Passed' : 'Blocked'} · Net reward/risk {debate.execution_validation.metrics?.net_rr ?? 'N/A'}</div>}
+              <p className="mt-3 text-xs text-slate-400">Rule-based validation is not a probability or guarantee of profit. Old debates remain unchanged.</p>
+            </details>
+          )}
           {debate.episodic_memory && (
             <details className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 sm:p-4 text-ink shadow-sm">
               <summary className="cursor-pointer select-none text-sm font-bold text-ink">Adaptive learning memory · Context for all three agents</summary>

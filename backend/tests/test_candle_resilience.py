@@ -290,7 +290,7 @@ async def test_debate_engine_blocks_stale_and_insufficient_candles():
         with pytest.raises(ValueError, match="cooldown active"):
             await engine.build_snapshot("NIFTY")
 
-    # Fewer than 20 candles must be rejected cleanly
+    # Fewer than 50 candles must be rejected cleanly
     short_meta = {
         "candles": [{"time": int(time.time()) - 300 * i, "open": 25000, "high": 25010, "low": 24990, "close": 25005, "volume": 100} for i in range(10, 0, -1)],
         "source": "live",
@@ -302,5 +302,5 @@ async def test_debate_engine_blocks_stale_and_insufficient_candles():
         patch("debate_engine.angel_service.is_configured", return_value=True),
         patch("debate_engine.angel_service.get_candles_with_meta", AsyncMock(return_value=short_meta)),
     ):
-        with pytest.raises(ValueError, match="minimum 20 required"):
+        with pytest.raises(ValueError, match="minimum 50 required"):
             await engine.build_snapshot("NIFTY")
