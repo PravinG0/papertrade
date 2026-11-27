@@ -19,7 +19,7 @@ function DebateResult({result}) {
 
 export default function McxDebatePanel({future,expiry}) {
   const [status,setStatus]=useState(null), [interval,setIntervalValue]=useState(5), [lots,setLots]=useState(1), [cap,setCap]=useState(5), [auto,setAuto]=useState(false), [busy,setBusy]=useState(false), [err,setErr]=useState(''),[manual,setManual]=useState(null);
-  useEffect(()=>{let alive=true,timer; async function poll(){try{const r=await api.get('/mcx/debate/status'); if(alive)setStatus(r.data);}catch(e){if(alive)setErr(errorText(e));}finally{if(alive)timer=setTimeout(poll,5000);}}poll();return()=>{alive=false;clearTimeout(timer);};},[]);
+  useEffect(()=>{let alive=true,timer; async function poll(){try{const r=await api.get('/mcx/debate/status',{timeout:35000}); if(alive){setStatus(r.data); setErr(prev=>prev&&prev.includes('timeout')?'':prev);}}catch(e){if(alive && !busy)setErr(errorText(e));}finally{if(alive)timer=setTimeout(poll,5000);}}poll();return()=>{alive=false;clearTimeout(timer);};},[]);
   useEffect(()=>{if(status){setIntervalValue(status.interval);setLots(status.lots);setCap(status.max_trades);setAuto(status.auto_execute);}},[status?.generation]);
   async function configure(enabled){setBusy(true);setErr('');try{const r=await api.post('/mcx/debate/config',enabled?{enabled,auto_execute:auto,interval,lots,max_trades:cap,future,expiry}:{enabled:false,auto_execute:false});setStatus(r.data);}catch(e){setErr(errorText(e));}finally{setBusy(false);}}
   async function run(){setBusy(true);setErr('');try{const r=await api.post('/mcx/debate/run',null,{params:{future,expiry},timeout:180000});setManual(r.data);}catch(e){setErr(errorText(e));}finally{setBusy(false);}}
