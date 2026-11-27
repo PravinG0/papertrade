@@ -763,10 +763,14 @@ class AngelService:
                     break
 
                 if resp.status_code in (429, 403):
+                    has_retry_hdr = bool(resp.headers.get("Retry-After") or resp.headers.get("retry-after"))
                     retry_after = self._parse_retry_after(resp, default_sec=12.0 if resp.status_code == 429 else 8.0)
                     last_code = f"HTTP_{resp.status_code}"
                     last_reason = f"Angel One historical API rate-limited/rejected (HTTP {resp.status_code}); retry in {int(retry_after)}s."
                     logger.warning("Historical candles HTTP %s for %s (attempt %d/%d)", resp.status_code, sym_norm, attempt + 1, max_attempts)
+                    if resp.status_code == 403 and attempt == 0 and not has_retry_hdr:
+                        await asyncio.sleep(1.2 + random.uniform(0.05, 0.2))
+                        continue
                     if attempt < max_attempts - 1 and retry_after <= 3.0:
                         await asyncio.sleep(retry_after + random.uniform(0.05, 0.25))
                         continue
