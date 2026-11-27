@@ -124,16 +124,16 @@ export default function McxResearch({ signedIn }) {
         <label className="text-xs font-semibold">Independent option expiry<select value={expiry || market.selected_expiry || ''} onChange={e => setExpiry(e.target.value)} className="mt-1 block w-full rounded-lg border bg-white p-2 text-sm">{!market.option_expiries.length && <option value="">Unavailable</option>}{market.option_expiries.map(d => <option key={d}>{d}</option>)}</select></label>
       </div>}
     </header>
-    <nav className="grid grid-cols-3 gap-2 rounded-xl bg-white border p-2" aria-label="MCX terminal tabs">{[['trade','Option Buy/Sell'],['chat','Chat'],['history','History']].map(([key,label])=><button key={key} onClick={()=>setTab(key)} aria-pressed={tab===key} className={`rounded-lg px-2 py-3 text-xs sm:text-sm font-semibold ${tab===key?'bg-cyan-700 text-white':'text-slate-700 bg-slate-100'}`}>{label}</button>)}</nav>
+    <nav className="grid grid-cols-3 gap-2 rounded-xl bg-white border p-2" aria-label="MCX terminal tabs">{[['trade','Option Buy/Sell'],['chat','Chat'],['history','History']].map(([key,label])=><button key={key} onClick={()=>setTab(key)} aria-pressed={tab===key} className={`rounded-lg px-2 py-3 text-xs sm:text-sm font-semibold ${tab===key?'bg-cyan-700 text-white':'text-ink bg-[#eef1f6]'}`}>{label}</button>)}</nav>
     {tab==='chat' && <McxDebatePanel future={contract} expiry={market?.selected_expiry}/>}
     {tab==='history' && <McxHistory paper={mcxPaper}/>}
     <div hidden={tab!=='trade'} className="space-y-4">
-    <div className="bg-white rounded-2xl border p-4 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold">Futures candles · {contract || '—'}</h2><div className="flex flex-wrap gap-1">{FRAMES.map(f => <button key={f} onClick={() => setFrame(f)} aria-pressed={frame === f} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${frame === f ? 'bg-cyan-700 text-white' : 'bg-slate-100 text-slate-800'}`}>{f}</button>)}</div></div>
-      <p className="text-xs text-slate-600">Historical REST candles · {meta?.source || 'unavailable'} · {meta?.last_candle_ist || 'No confirmed latest candle'}</p>
+    <div className="bg-white rounded-2xl border p-4 space-y-3 text-ink">
+      <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold text-ink">Futures candles · {contract || '—'}</h2><div className="flex flex-wrap gap-1">{FRAMES.map(f => <button key={f} onClick={() => setFrame(f)} aria-pressed={frame === f} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${frame === f ? 'bg-cyan-700 text-white' : 'bg-[#eef1f6] text-ink'}`}>{f}</button>)}</div></div>
+      <p className="text-xs text-slate-300">Historical REST candles · {meta?.source || 'unavailable'} · {meta?.last_candle_ist || 'No confirmed latest candle'}</p>
       {chartError && <p role="alert" className="text-sm text-amber-800">{chartError}</p>}
       <FutureChart key={`${contract}-${frame}`} rows={meta?.candles || []} />
-      <div className="rounded-lg bg-slate-50 p-3 text-sm">{meta?.analysis ? <><strong>Research trend: {meta.analysis.direction}</strong><div className="text-xs mt-1">EMA20 {price(meta.analysis.ema20)} · EMA50 {price(meta.analysis.ema50)} · ATR {price(meta.analysis.atr_pct)}% · {meta.analysis.count} completed candles</div></> : <span className="text-slate-600">No validated trend: {meta?.analysis_reason || 'awaiting sufficient completed candles'}</span>}</div>
+      <div className="rounded-lg bg-[#f4f6fa] p-3 text-sm text-ink">{meta?.analysis ? <><strong>Research trend: {meta.analysis.direction}</strong><div className="text-xs mt-1 text-slate-300">EMA20 {price(meta.analysis.ema20)} · EMA50 {price(meta.analysis.ema50)} · ATR {price(meta.analysis.atr_pct)}% · {meta.analysis.count} completed candles</div></> : <span className="text-slate-300">No validated trend: {meta?.analysis_reason || 'awaiting sufficient completed candles'}</span>}</div>
     </div>
     {mcxPaper && (
       <div className="bg-white rounded-2xl border p-4 space-y-2 text-xs">
