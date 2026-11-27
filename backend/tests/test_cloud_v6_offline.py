@@ -136,3 +136,48 @@ def test_scrip_master_keeps_mcx_out_of_index_order_resolver():
 def test_default_auto_execution_safe_and_ws_settings_bounded():
     assert Settings(_env_file=None,V6_AUTO_EXECUTION_ENABLED=False).V6_AUTO_EXECUTION_ENABLED is False
     with pytest.raises(ValueError):Settings(BROKER_STREAM_MAX_SUBSCRIPTIONS=1001)
+
+
+@pytest.mark.asyncio
+async def test_closed_market_indices_display_real_close_while_spot_price_rejects(monkeypatch):
+    from datetime import timedelta
+    from angel_service import AngelService
+
+    svc = AngelService()
+    monkeypatch.setattr(svc, "is_configured", lambda: True)
+    monkeypatch.setattr(svc, "_nse_is_open", lambda now_dt=None: False)
+    svc.stream.enabled = False
+
+    closed_ts = (datetime.now(tz=IST) - timedelta(hours=6)).strftime("%d-%b-%Y %H:%M:%S")
+
+    async def fake_fetch_quotes(exchange_tokens, allow_closed=False):
+        import time as _t
+        if not allow_closed:
+            return {}
+        item = {
+            "exchange": "NSE",
+            "symbolToken": "99926000",
+            "tradingSymbol": "Nifty 50",
+            "ltp": 25607.20,
+            "open": 25650.0,
+            "high": 25700.0,
+            "low": 25550.0,
+            "close": 25593.85,
+            "netChange": 13.35,
+            "percentChange": 0.05,
+            "exchFeedTime": closed_ts,
+            "_transport": "rest",
+            "_market_closed": True,
+        }
+        svc._rest_quote_cache[("NSE", "99926000")] = (_t.time(), item)
+        return {"99926000": item}
+
+    monkeypatch.setattr(svc, "fetch_quotes", fake_fetch_quotes)
+
+    indices = await svc.get_spot_indices()
+    nifty = next(r for r in indices if r["symbol"] == "NIFTY")
+    assert nifty["ltp"] == 25607.2
+    assert nifty["source"] == "closed"
+
+    with pytest.raises(ValueError):
+        await svc.get_spot_price("NIFTY")

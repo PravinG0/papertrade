@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import pyotp
 
-from config import INDEX_CONFIG, normalize_index_symbol, settings
+from config import INDEX_CONFIG, get_session_bounds, is_trading_day, normalize_index_symbol, settings
 from broker_stream import BrokerStream
 from mcx_market import configured_mcx_bounds
 from greeks import BlackScholesEngine, calculate_max_pain, calculate_pcr
@@ -225,7 +225,15 @@ class AngelService:
         """'live' when Angel One quotes were fetched in the last 30s, else 'simulated'."""
         return "live" if (time.time() - self._last_live_ok) < settings.BROKER_QUOTE_MAX_AGE_SECONDS else ("stale" if self.is_configured() else "unavailable")
 
-    async def fetch_quotes(self, exchange_tokens: dict[str, list[str]]) -> dict[str, dict[str, Any]]:
+    @staticmethod
+    def _nse_is_open(now_dt: Optional[datetime] = None) -> bool:
+        now_dt = now_dt or datetime.now(tz=IST)
+        if not is_trading_day(now_dt):
+            return False
+        start_t, end_t = get_session_bounds(now_dt)
+        return start_t <= now_dt.time() <= end_t
+
+    async def fetch_quotes(self, exchange_tokens: dict[str, list[str]], allow_closed: bool = False) -> dict[str, dict[str, Any]]:
         """Throttled SmartAPI FULL-mode quote call. Returns {symbolToken: item}. Never raises."""
         exchange_tokens = {k: v for k, v in exchange_tokens.items() if v}
         if not exchange_tokens or not await self.authenticate():
@@ -270,11 +278,15 @@ class AngelService:
                     if ex not in matches:
                         continue
                     item = dict(item, exchange=ex, _transport="rest")
-                    if not self._quote_is_current(item, settings.BROKER_QUOTE_MAX_AGE_SECONDS):
+                    if self._quote_is_current(item, settings.BROKER_QUOTE_MAX_AGE_SECONDS):
+                        item.pop("_market_closed", None)
+                    elif allow_closed and not self._nse_is_open() and self._quote_is_current(item, 7 * 86400):
+                        item["_market_closed"] = True
+                    else:
                         continue
                     out[tok] = item
                     self._rest_quote_cache[(ex, tok)] = (now, item)
-                if out:
+                if any(not q.get("_market_closed") for q in out.values()):
                     self._last_live_ok = now
                 return out
             except Exception as exc:
@@ -298,9 +310,10 @@ class AngelService:
                 "rest_fallback_enabled": settings.BROKER_REST_FALLBACK,
                 "quote_max_age_seconds": settings.BROKER_QUOTE_MAX_AGE_SECONDS}
 
-    async def get_token_quotes(self, items: list[tuple[str, str]], ttl: float = 4.0) -> dict[str, dict[str, Any]]:
+    async def get_token_quotes(self, items: list[tuple[str, str]], ttl: float = 4.0, allow_closed: bool = False) -> dict[str, dict[str, Any]]:
         """Stream first, bounded paced REST recovery only for missing fresh quotes.
         Legacy callers return a token-keyed map; refuse ambiguous tokens across exchanges.
+        When allow_closed=True and NSE is closed, also accept real broker closing quotes for display.
         """
         self._ensure_loop()
         items = list(dict.fromkeys((str(ex).upper(), str(tok)) for ex, tok in items if tok))
@@ -313,6 +326,8 @@ class AngelService:
         if self.stream.enabled:
             self.stream.watch(items)
         max_age = settings.BROKER_QUOTE_MAX_AGE_SECONDS
+        closed_ok = allow_closed and not self._nse_is_open()
+        effective_max_age = 7 * 86400 if closed_ok else max_age
         result = {}
         def lookup():
             missing = []
@@ -320,10 +335,16 @@ class AngelService:
                 q = self.stream.get(ex, tok, max_age=max_age) if self.stream.enabled else None
                 if q is None:
                     cached = self._rest_quote_cache.get((ex, tok))
-                    if cached and time.time()-cached[0] < max(ttl, 2.0) and self._quote_is_current(cached[1], max_age):
+                    if cached and time.time()-cached[0] < max(ttl, 2.0) and self._quote_is_current(cached[1], effective_max_age):
                         q = cached[1]
                 if q is not None and self._quote_is_current(q, max_age):
-                    result[tok] = q.copy()
+                    q_copy = q.copy()
+                    q_copy.pop("_market_closed", None)
+                    result[tok] = q_copy
+                elif q is not None and closed_ok and self._quote_is_current(q, effective_max_age):
+                    q_copy = q.copy()
+                    q_copy["_market_closed"] = True
+                    result[tok] = q_copy
                 else:
                     result.pop(tok, None)
                     missing.append((ex,tok))
@@ -344,9 +365,9 @@ class AngelService:
                     for ex,tok in missing[i:i+50]:
                         group.setdefault(ex, []).append(tok)
                         self._rest_attempts[(ex,tok)] = time.time()
-                    await self.fetch_quotes(group)
+                    await self.fetch_quotes(group, allow_closed=allow_closed)
                 lookup()
-        if result:
+        if any(not q.get("_market_closed") for q in result.values()):
             self._last_live_ok = time.time()
         # Bound idle REST cache independently of stream subscriptions.
         now = time.time()
@@ -366,7 +387,7 @@ class AngelService:
 
         quotes_by_sym: dict[str, dict[str, Any]] = {}
         fetched = await self.get_token_quotes(
-            [(e, t) for e, toks in exchange_tokens.items() for t in toks], ttl=4.0
+            [(e, t) for e, toks in exchange_tokens.items() for t in toks], ttl=4.0, allow_closed=True
         )
         vix_item = fetched.get("99926017")
         if vix_item and float(vix_item.get("ltp") or 0) > 0:
@@ -400,7 +421,7 @@ class AngelService:
                 "percent_change": round(pct_chg, 2),
                 "timestamp": datetime.now(tz=IST).isoformat(),
                 "exchange_timestamp": (exchange_time.isoformat() if (exchange_time := self._parse_exchange_quote_time(item)) else None),
-                "source": "live",
+                "source": "closed" if item.get("_market_closed") else "live",
                 "transport": item.get("_transport", "rest"),
             }
             quotes_by_sym[sym_key] = entry
@@ -412,10 +433,10 @@ class AngelService:
                 result.append(quotes_by_sym[sym_key])
                 continue
             cached = self._spot_cache.get(sym_key)
-            if cached and cached[1].get("source") in ("live", "stale"):
-                # Keep the last REAL price (flagged stale) rather than inventing one.
+            if cached and cached[1].get("source") in ("live", "stale", "closed"):
+                # Keep the last REAL price (flagged closed/stale) rather than inventing one.
                 stale = cached[1].copy()
-                stale["source"] = "stale"
+                stale["source"] = "closed" if (cached[1].get("source") == "closed" and not self._nse_is_open()) else "stale"
                 result.append(stale)
             elif cached and now - cached[0] < 30.0:
                 result.append(cached[1].copy())
@@ -1279,7 +1300,7 @@ class AngelService:
             return None
 
         quotes = await self.get_token_quotes(
-            [(c.exchange, c.token) for c in contracts.values()], ttl=4.0
+            [(c.exchange, c.token) for c in contracts.values()], ttl=4.0, allow_closed=True
         )
         if not quotes:
             return None
@@ -1400,7 +1421,29 @@ class AngelService:
         lot_size = scrip_master.lot_size(sym_norm) or spec["lot_size"]
 
         replaying = override_spot is not None and override_spot > 0
-        spot = float(override_spot) if replaying else await self.get_spot_price(sym_norm)
+        spot_closed = False
+        if replaying:
+            spot = float(override_spot)
+        else:
+            try:
+                spot = await self.get_spot_price(sym_norm)
+            except ValueError:
+                if self._nse_is_open():
+                    raise
+                indices = await self.get_spot_indices()
+                match = next(
+                    (
+                        row for row in indices
+                        if row.get("symbol") == sym_norm
+                        and row.get("source") in ("closed", "live")
+                        and float(row.get("ltp") or 0) > 0
+                    ),
+                    None,
+                )
+                if not match:
+                    raise
+                spot = float(match["ltp"])
+                spot_closed = True
 
         avail_expiries = self.get_expiries(sym_norm)
         selected_expiry = None
@@ -1433,7 +1476,7 @@ class AngelService:
             chain_rows = await self._live_chain_rows(
                 sym_norm, selected_expiry["date"], spot, strikes_count, lot_size, t_years)
             if chain_rows:
-                data_source = "live"
+                data_source = "closed" if (spot_closed or not self._nse_is_open()) else "live"
                 atm_strike = next((r["strike"] for r in chain_rows if r["is_atm"]), atm_strike)
 
         if not chain_rows and not replaying and (self.is_configured() or not settings.ALLOW_SIMULATED_TRADING):
