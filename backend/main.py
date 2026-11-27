@@ -1027,9 +1027,6 @@ async def run_debate_endpoint(
             target_symbol, user_id=current_user.id if current_user else None
         )
         return session
-    except ValueError as exc:
-        logger.warning("Debate skipped/unavailable for %s: %s", target_symbol, exc)
-        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         logger.error("Debate execution failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"AI Debate failed: {str(exc)}")

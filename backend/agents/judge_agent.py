@@ -86,7 +86,6 @@ class JudgeAgent:
     ) -> JudgeAgentOutput:
         """Arbitrate between Bull and Bear, applying institutional risk guardrails."""
         user_prompt = self._build_prompt(snapshot, bull, bear)
-        user_prompt += "\nIndependent completed-bar multi-timeframe data (UNKNOWN means unavailable; do not invent). Regime: " + snapshot.market_regime + "; frames: " + json.dumps(snapshot.timeframes)
         user_prompt += f"\nSession open: {snapshot.day_open}; session price reference: {snapshot.session_reference}. If not VWAP, do not call it true VWAP."
 
         models_to_try = gemini_candidate_models()

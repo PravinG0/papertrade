@@ -116,52 +116,11 @@ function ConvictionTugOfWar({ bullScore = 0, bearScore = 0 }) {
   );
 }
 
-function MarketMatrixBar({ snapshot, isArchived = false, debateTimestamp = null }) {
+function MarketMatrixBar({ snapshot }) {
   if (!snapshot) return null;
 
-  const dataStatus = String(snapshot.data_status || 'unknown').toLowerCase();
-  const statusStyles = {
-    live: 'bg-emerald-950 text-emerald-300 border-emerald-700/60',
-    cached: 'bg-cyan-950 text-cyan-300 border-cyan-700/60',
-    stale: 'bg-amber-950 text-amber-300 border-amber-700/60',
-    simulated: 'bg-purple-950 text-purple-300 border-purple-700/60',
-    unavailable: 'bg-rose-950 text-rose-300 border-rose-700/60',
-    unknown: 'bg-slate-900 text-slate-300 border-slate-700/60',
-  };
-  const statusLabel = {
-    live: 'LIVE DATA',
-    cached: 'CACHED DATA',
-    stale: 'STALE DATA',
-    simulated: 'SIMULATED',
-    unavailable: 'UNAVAILABLE',
-    unknown: 'SNAPSHOT',
-  }[dataStatus] || dataStatus.toUpperCase();
-
   return (
-    <div className="bg-[#f4f6fa]/90 border border-slate-800/90 rounded-xl p-3 text-xs space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5 border-b border-slate-800/70">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className={`px-2 py-0.5 rounded-md border font-mono text-[10px] font-bold ${statusStyles[dataStatus] || statusStyles.unknown}`}>
-            {statusLabel}
-          </span>
-          <span className={`px-2 py-0.5 rounded-md border font-mono text-[10px] font-bold ${
-            isArchived
-              ? 'bg-amber-950 text-amber-300 border-amber-700/60'
-              : 'bg-slate-900 text-slate-300 border-slate-700/60'
-          }`}>
-            {isArchived ? 'PREVIOUS DEBATE INDICATORS' : 'CURRENT DEBATE INDICATORS'}
-          </span>
-        </div>
-        <div className="flex flex-wrap items-center gap-3 text-[11px] font-mono text-slate-300">
-          {snapshot.last_candle_ist && (
-            <span>Last candle: <strong className="text-ink">{snapshot.last_candle_ist}</strong></span>
-          )}
-          {(debateTimestamp || snapshot.timestamp) && (
-            <span>Snapshot: <strong className="text-ink">{debateTimestamp || snapshot.timestamp}</strong></span>
-          )}
-        </div>
-      </div>
-      <div className="overflow-x-auto">
+    <div className="bg-[#f4f6fa]/90 border border-slate-800/90 rounded-xl p-3 text-xs overflow-x-auto">
       <div className="debate-metrics flex items-center justify-between gap-4 min-w-[760px]">
         <div className="flex items-center gap-1.5">
           <span className="text-slate-400 uppercase text-[10px] font-semibold">Spot</span>
@@ -207,7 +166,6 @@ function MarketMatrixBar({ snapshot, isArchived = false, debateTimestamp = null 
             <span className="text-rose-400">C:{snapshot.call_oi_wall || '—'}</span> | <span className="text-emerald-400">P:{snapshot.put_oi_wall || '—'}</span>
           </span>
         </div>
-      </div>
       </div>
     </div>
   );
@@ -289,18 +247,10 @@ export default function DebateArena({
   const lastSessionRef = useRef(undefined);
   const latestRequestRef = useRef(0);
   const historyBusyRef = useRef(false);
-  const lastDebateTriggerRef = useRef(0);
   const symbolRef = useRef(currentSymbol);
   symbolRef.current = currentSymbol;
   const [marketHoursOnly, setMarketHoursOnly] = useState(true);
   const [schedulerInfo, setSchedulerInfo] = useState({});
-  const [retryCooldownSec, setRetryCooldownSec] = useState(0);
-
-  useEffect(() => {
-    if (retryCooldownSec <= 0) return undefined;
-    const timer = setTimeout(() => setRetryCooldownSec((prev) => Math.max(0, prev - 1)), 1000);
-    return () => clearTimeout(timer);
-  }, [retryCooldownSec]);
 
   // Sync internal symbol if parent prop changes
   useEffect(() => {
@@ -516,18 +466,8 @@ export default function DebateArena({
     }
   };
 
-  // Trigger Live AI Debate (with rapid-click cooldown guard)
+  // Trigger Live AI Debate
   const handleTriggerDebate = async () => {
-    if (loading) return;
-    const now = Date.now();
-    const elapsedMs = now - lastDebateTriggerRef.current;
-    if (elapsedMs < 4000) {
-      const waitSec = Math.ceil((4000 - elapsedMs) / 1000);
-      setRetryCooldownSec(waitSec);
-      return;
-    }
-    lastDebateTriggerRef.current = now;
-    setRetryCooldownSec(4);
     setArchivedDebate(null);
     const request = ++latestRequestRef.current;
     const symbol = currentSymbol;
@@ -825,39 +765,20 @@ export default function DebateArena({
           {/* Run AI Debate Button */}
           <button
             onClick={handleTriggerDebate}
-            disabled={loading || retryCooldownSec > 0}
+            disabled={loading}
             className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs bg-gradient-to-r from-purple-600 hover:from-purple-500 to-indigo-600 hover:to-indigo-500 text-white shadow-lg shadow-purple-900/30 transition-all disabled:opacity-50"
           >
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            <span>
-              {loading
-                ? 'Agents Deliberating...'
-                : retryCooldownSec > 0
-                ? `Wait ${retryCooldownSec}s`
-                : 'Run AI Debate'}
-            </span>
+            <span>{loading ? 'Agents Deliberating...' : 'Run AI Debate'}</span>
           </button>
         </div>
       </div>
 
-      {/* Error Message with Controlled Retry */}
+      {/* Error Message */}
       {errorMsg && (
-        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 p-3 bg-rose-950/50 border border-rose-800/80 rounded-xl text-xs text-rose-200">
-          <div className="flex items-start gap-2 min-w-0 flex-1">
-            <AlertTriangle size={15} className="text-rose-400 flex-shrink-0 mt-0.5" />
-            <div className="space-y-0.5">
-              <div className="font-bold text-rose-300">Market data / AI Debate unavailable</div>
-              <div className="break-words">{errorMsg}</div>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={handleTriggerDebate}
-            disabled={loading || retryCooldownSec > 0}
-            className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs disabled:opacity-50 flex-shrink-0"
-          >
-            {retryCooldownSec > 0 ? `Retry (${retryCooldownSec}s)` : 'Retry'}
-          </button>
+        <div className="flex items-center gap-2 p-3 bg-rose-950/50 border border-rose-800/80 rounded-xl text-xs text-rose-200">
+          <AlertTriangle size={15} className="text-rose-400 flex-shrink-0" />
+          <span>{errorMsg}</span>
         </div>
       )}
 
@@ -950,41 +871,13 @@ export default function DebateArena({
       ) : (
         <>
           {/* Market Matrix Strip */}
-          <MarketMatrixBar
-            snapshot={snapshot}
-            isArchived={Boolean(archivedDebate)}
-            debateTimestamp={debate?.timestamp}
-          />
+          <MarketMatrixBar snapshot={snapshot} />
 
-          {debate.quantitative_validation && (
-            <details open className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 sm:p-4 text-ink shadow-sm">
-              <summary className="cursor-pointer text-sm font-bold text-ink">Quantitative validation · {debate.quantitative_validation.eligible ? 'Direction & option checks passed' : 'NO TRADE / blocked'}</summary>
-              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
-                <span>AI proposal: <strong className="text-ink">{debate.original_judge_verdict || judge.verdict}</strong></span>
-                <span>· Regime: <strong className="text-ink">{snapshot.market_regime || 'UNKNOWN'}</strong></span>
-                <span>· {snapshot.spot_fresh ? 'Fresh exchange spot' : 'Spot freshness unverified'}</span>
-              </div>
-              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
-                {['1d','1h','15m','5m','1m'].map(frame => {
-                  const f = snapshot.timeframes?.[frame];
-                  return <div key={frame} className="min-w-0 rounded-lg border border-slate-200 p-2 text-xs" title={f?.reason || 'Completed candle analysis'}>
-                    <div className="font-semibold text-slate-300">{frame}</div>
-                    <div className={'mt-1 break-words font-bold ' + (f?.direction === 'BULLISH' ? 'text-emerald-700' : f?.direction === 'BEARISH' ? 'text-rose-700' : 'text-slate-300')}>{f?.direction || 'UNKNOWN'}</div>
-                    <div className="mt-1 text-slate-400">{f?.count ?? 0} bars</div>
-                  </div>;
-                })}
-              </div>
-              {!!debate.quantitative_validation.reasons?.length && <ul className="mt-3 space-y-1 text-xs text-amber-800">{debate.quantitative_validation.reasons.map((r,i) => <li key={i}>• {r}</li>)}</ul>}
-              {debate.quantitative_validation.option && <div className="mt-3 text-xs text-slate-300">One-lot preview · Spread {debate.quantitative_validation.option.metrics?.spread_pct ?? 'N/A'}% · Net reward/risk {debate.quantitative_validation.option.metrics?.net_rr ?? 'N/A'} · Model delta {debate.quantitative_validation.option.greeks_estimate?.delta ?? 'N/A'}</div>}
-              {debate.execution_validation && <div className="mt-2 text-xs text-slate-300">Execution recheck · {debate.execution_validation.eligible ? 'Passed' : 'Blocked'} · Net reward/risk {debate.execution_validation.metrics?.net_rr ?? 'N/A'}</div>}
-              <p className="mt-3 text-xs text-slate-400">Rule-based validation is not a probability or guarantee of profit. Old debates remain unchanged.</p>
-            </details>
-          )}
           {debate.episodic_memory && (
-            <details className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 sm:p-4 text-ink shadow-sm">
-              <summary className="cursor-pointer select-none text-sm font-bold text-ink">Adaptive learning memory · Context for all three agents</summary>
-              <p className="mt-2 text-xs text-slate-300">Historical paper-trade evidence, not a prediction. Report explanations may be wrong. This is the saved context supplied to Gemini prompts; numerical fallback agents do not use the report text.</p>
-              <pre className="mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-relaxed font-sans text-ink">{debate.episodic_memory}</pre>
+            <details className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 sm:p-4 text-slate-800 shadow-sm">
+              <summary className="cursor-pointer select-none text-sm font-bold text-slate-900">Adaptive learning memory · Context for all three agents</summary>
+              <p className="mt-2 text-xs text-slate-600">Historical paper-trade evidence, not a prediction. Report explanations may be wrong. This is the saved context supplied to Gemini prompts; numerical fallback agents do not use the report text.</p>
+              <pre className="mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-relaxed font-sans">{debate.episodic_memory}</pre>
             </details>
           )}
           {(debate.skip_reason || judge.risk_warning) && (

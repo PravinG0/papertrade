@@ -59,15 +59,6 @@ class MarketSnapshot(BaseModel):
     heavyweights_alignment: Optional[str] = "BULLISH"
     fii_sentiment: Optional[str] = "NEUTRAL"
     global_sentiment: Optional[str] = "POSITIVE"
-    data_status: str = Field(default="unknown", description="live, cached, stale, simulated, or unavailable")
-    last_candle_ist: Optional[str] = Field(default=None, description="Timestamp of last validated candle in IST")
-    timeframes: dict[str, Any] = Field(default_factory=dict)
-    market_regime: str = "UNKNOWN"
-    spot_fresh: bool = False
-    session_active: bool = False
-    spot_exchange_timestamp: Optional[str] = None
-    option_expiry: Optional[str] = None
-    candle_count: int = Field(default=0, description="Number of validated candles used for indicators")
 
 
 class BullAgentOutput(BaseModel):
@@ -180,10 +171,6 @@ class DebateSession(BaseModel):
     user_id: Optional[int] = Field(default=None, description="Account the trade was executed in")
     auto_executed: bool = Field(default=False, description="True when the scheduler executed it")
     episodic_memory: Optional[str] = None
-    quantitative_validation: Optional[dict[str, Any]] = None
-    original_judge_verdict: Optional[str] = None
-    original_judge_proposal: Optional[dict[str, Any]] = None
-    execution_validation: Optional[dict[str, Any]] = None
     skip_reason: Optional[str] = Field(default=None, description="Why a BUY verdict was not executed")
     exec_entry_price: Optional[float] = Field(default=None, description="Live option price actually filled")
     exec_symbol: Optional[str] = Field(default=None, description="Exchange trading symbol of the traded option")

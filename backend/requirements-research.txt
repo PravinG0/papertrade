@@ -1,3 +1,0 @@
-# Optional only; not installed in the production backend.
-scikit-learn>=1.5,<2
-# Install xgboost or lightgbm separately if using the corresponding optional research mode.
