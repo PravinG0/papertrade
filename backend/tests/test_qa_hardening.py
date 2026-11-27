@@ -131,20 +131,16 @@ async def test_qa12_quote_freshness_and_stale_mtm(monkeypatch):
     tok = "99999"
     now = time.time()
 
-    # Fresh quote accepted
-    svc._tok_cache[tok] = (now - 1.0, {"ltp": 120.5})
-    ok, _, age = svc._is_quote_valid_and_fresh(tok, {"ltp": 120.5}, max_age_seconds=5.0)
+    # Exchange timestamp, not HTTP receipt/cache time, establishes freshness.
+    from datetime import datetime, timezone, timedelta
+    fresh_quote = {"ltp": 120.5, "exchFeedTime": (datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()}
+    ok, _, age = svc._is_quote_valid_and_fresh(tok, fresh_quote, max_age_seconds=5.0)
     assert ok is True and age <= 5.0
-
-    # Expired local cache rejected
-    svc._tok_cache[tok] = (now - 25.0, {"ltp": 120.5})
-    ok_stale, _, _ = svc._is_quote_valid_and_fresh(tok, {"ltp": 120.5}, max_age_seconds=10.0)
-    assert ok_stale is False
-
-    # Non-positive / NaN rejected
-    svc._tok_cache[tok] = (now, {"ltp": float("nan")})
-    assert svc._is_quote_valid_and_fresh(tok, {"ltp": float("nan")})[0] is False
-    assert svc._is_quote_valid_and_fresh(tok, {"ltp": 0})[0] is False
+    old_quote = dict(fresh_quote, exchFeedTime=(datetime.now(timezone.utc)-timedelta(seconds=25)).isoformat())
+    assert svc._is_quote_valid_and_fresh(tok, old_quote, max_age_seconds=10.0)[0] is False
+    assert svc._is_quote_valid_and_fresh(tok, {"ltp":120.5})[0] is False
+    assert svc._is_quote_valid_and_fresh(tok, dict(fresh_quote, ltp=float("nan")))[0] is False
+    assert svc._is_quote_valid_and_fresh(tok, dict(fresh_quote, ltp=0))[0] is False
 
     # Missing fresh quote marks position quote_stale=True and check_intraday_squareoff defers cleanly
     user = await _make_user("qa12")

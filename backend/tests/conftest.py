@@ -14,3 +14,5 @@ os.environ["ENABLE_KEEP_ALIVE"] = "false"
 os.environ["ALLOW_SIMULATED_TRADING"] = "true"
 os.environ["ALLOW_OFFHOURS_TRADING"] = "true"
 os.environ["SCRIP_CACHE_PATH"] = str(Path(_test_directory.name) / "scrip.json")
+os.environ['BROKER_STREAM_ENABLED'] = 'false'
+os.environ['V6_AUTO_EXECUTION_ENABLED'] = 'true'

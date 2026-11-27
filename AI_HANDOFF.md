@@ -1,58 +1,26 @@
-# TradeLab / PaperTrade — AI Developer Handoff
+# TradeLab Cloud V6 — AI Developer Handoff
 
-**Current Revision:** TradeLab V5 Hybrid Quantitative AI Engine (`tradelab_v5_hybrid` merged onto production `56ddbfb`, Git backup tag `backup-pre-v5-hybrid-56ddbfb`), 26 November 2026.  
-**Read alongside:** `V5_HYBRID_ENGINE.md`, `PRODUCTION_MERGE_REPORT.md`, `FINAL_QA_REPORT.md`, `DATA_PRESERVATION_REPORT.md`, `DEPLOYMENT_REPORT.md`, `DATABASE_MIGRATION_REPORT.md`, `WALLET_RECONCILIATION.md`.
+**Current Revision:** TradeLab Cloud V6 (`TradeLab_Cloud_V6` merged onto `main` `308e7aa`, backup tag `backup-pre-v6-308e7aa`), 27 November 2026.  
+**Read alongside:** `V6_IMPLEMENTATION.md`, `CLOUD_V6_IMPLEMENTATION.md`, `WEBSOCKET_TEST_REPORT.md`, `MCX_TEST_REPORT.md`, `SHADOW_TRADING_TEST_REPORT.md`, `DATABASE_MIGRATION_REPORT.md`, `DATA_PRESERVATION_REPORT.md`, `OLD_VS_V6_COMPARISON.md`, `FINAL_QA_REPORT.md`, `DEPLOYMENT_REPORT.md`.
 
 ---
 
-## 1. Architecture & V5 Hybrid Stack
+## 1. Cloud V6 Architecture
+- **Frontend (React 18 + Vite 5.4 + TailwindCSS on Vercel):**
+  - [`Header.jsx`](file:///home/pravin/Documents/Trading/papertrade/frontend/src/components/Header.jsx): Market Feed Status (`LIVE · WS (<age>s)`, `LIVE · REST`, `STALE`, `DISCONNECTED · UNAVAILABLE`, `DELAYED / UNAVAILABLE`, `MARKET CLOSED`, `SIMULATED`) with WebSocket/REST transport, reconnects, and exchange timestamp tooltip.
+  - [`DebateArena.jsx`](file:///home/pravin/Documents/Trading/papertrade/frontend/src/components/DebateArena.jsx): Quantitative Validation panel (5-timeframe direction & bar count grid, regime, spot freshness, option preview spread/net R:R/model delta), Dynamic Risk Limits panel, and Shadow Research (Champion vs Challenger) panel.
+  - [`McxResearch.jsx`](file:///home/pravin/Documents/Trading/papertrade/frontend/src/components/McxResearch.jsx): MCX CRUDEOIL futures & options viewer, seasonal session status, MCX AI Technical Analysis (`/api/mcx/debate/run`), and isolated MCX Paper Trading wallet (`/api/mcx/paper/*`).
+- **Backend (Python + FastAPI + Supabase PostgreSQL on Render Free):**
+  - [`broker_stream.py`](file:///home/pravin/Documents/Trading/papertrade/backend/broker_stream.py) & [`angel_service.py`](file:///home/pravin/Documents/Trading/papertrade/backend/angel_service.py): Outbound Angel One WebSocket 2.0 (`wss://smartapisocket.angelone.in/smart-stream`) for `NSE`/`NFO`/`BSE`/`BFO`/`MCX` + bounded REST fallback + `1.2s` historical candle pacing, `60s` 5m cache TTL, `HTTP 403` retry backoff, and `401`/`AG8001` token renewal.
+  - [`quant_engine.py`](file:///home/pravin/Documents/Trading/papertrade/backend/quant_engine.py): Restored V5 5-timeframe completed-bar validation (`1m`, `5m`, `15m`, `1h`, `1d`) with `41e2e67` isolated prior-day gap tolerance.
+  - [`mcx_market.py`](file:///home/pravin/Documents/Trading/papertrade/backend/mcx_market.py): `CRUDEOIL` contract parser (`lot_size=100`), seasonal session bounds (`09:00–23:55 IST` winter `2026-11-02..2027-03-12`), MCX charges (`calculate_mcx_charges`), technical summary, and isolated MCX paper wallet (`mcx-paper:<uid>` in `app_kv`).
+  - [`shadow_engine.py`](file:///home/pravin/Documents/Trading/papertrade/backend/shadow_engine.py) & [`adaptive_store.py`](file:///home/pravin/Documents/Trading/papertrade/backend/adaptive_store.py): Live Shadow Trading (`shadow-ledger:<uid>`), Champion vs Challenger virtual wallets, and Dynamic Risk Limits (`risk-config:<uid>`).
 
-- **Frontend:** React 18, Vite 5.4, TailwindCSS (inverted light palette; dark text uses `text-ink` / `text-slate-300`), Axios, `lightweight-charts`. [`DebateArena.jsx`](file:///home/pravin/Documents/Trading/papertrade/frontend/src/components/DebateArena.jsx) includes the **Quantitative Validation** panel (original AI proposal vs deterministic filter verdict, 5-timeframe status grid, regime, spot freshness, option preview spread/net R:R/model delta, execution recheck), Market Matrix data-status/IST timestamp bar, controlled Retry with 4s cooldown, and Adaptive Learning Memory panel.
-- **Backend:** FastAPI, SQLAlchemy 2.0 AsyncIO (`aiosqlite` for local/tests, `asyncpg` + Supabase PostgreSQL pooler for production), Pydantic v2, Google `genai` SDK, Angel One SmartAPI REST + `pyotp` (paper-trading only; zero broker order routing).
-- **V5 Quantitative & Research Modules:**
-  - [`backend/quant_engine.py`](file:///home/pravin/Documents/Trading/papertrade/backend/quant_engine.py): deterministic completed-bar validation (`expected_starts`, `validated_bars` requiring 50 consecutive valid candles, up to 200 warm-up), EMA20/50ATR separation, regime detection (`market_regime`), directional alignment (`validate_direction`), two-sided option spread/fee-adjusted net R:R (`option_validation`), Black-Scholes midpoint Greeks estimate (`estimate_option_greeks`), full-session reference check (`complete_session_reference`), and empirical confidence band summary (`calibration_summary`).
-  - [`backend/research_backtest.py`](file:///home/pravin/Documents/Trading/papertrade/backend/research_backtest.py) & [`backend/research_ml.py`](file:///home/pravin/Documents/Trading/papertrade/backend/research_ml.py): offline-only Champion vs Challenger backtester and chronological purged-label ML calibration pipeline (`requirements-research.txt`). Never used by live or automatic trading.
+## 2. Database Preservation & Zero-Migration Rollout
+- **Zero schema migrations required:** Shadow ledger, MCX paper wallet, and dynamic risk config use existing `app_kv` (`AppKVModel`), and V5 metadata uses existing JSON columns (`debate_records.payload`, `ai_trade_evidence.snapshot`).
+- **`pravin_g` (`user_id=1`, `portfolio_id=10`) Preserved:** Reconciled cash `₹9,91,609.77`, `90` closed `paper_trades`, all AI debates, daily reports, and adaptive learning memory remain 100% intact.
 
-## 2. Database Schema & Existing Data Preservation
-
-- **No V5 schema/column migration required:** V5 metadata (`timeframes`, `market_regime`, `quantitative_validation`, `execution_validation`, `original_judge_verdict`, `quant_version: "quant-v1"`) is stored inside existing `debate_records.payload` and `ai_trade_evidence.snapshot` JSON fields.
-- **Backward Compatibility & Preservation:** Legacy debate payloads deserialize cleanly with defaults; pre-V5 trades remain untouched and are **never** relabeled as `verified_quant`; existing user accounts, wallet balances, open/closed trades, pending orders, daily reports, and adaptive memory are 100% preserved.
-
-## 3. Environment Variables
-
-Preserve production `.env` privately (never commit). Optional V5 config defaults in `.env.example`:
-- `MEMORY_EXTENDED_DAYS=90`
-- `QUANT_MIN_CONFIDENCE=8`
-- `QUANT_MIN_NET_RR=1.5`
-- `QUANT_MAX_SPREAD_PCT=2.0`
-- `QUANT_MAX_VERDICT_AGE_SECONDS=180`
-
-## 4. Verification Results (26 November 2026)
-
-- **Python syntax (`py_compile`):** **PASS** across all backend modules, agents, and tests.
-- **Backend `pytest`:** **303 passed, 1 skipped** (`test_ml_research_pipeline_on_synthetic_fixture` skipped because optional `scikit-learn` research dependency is not installed in runtime environment) using isolated temporary SQLite DBs.
-- **Frontend JS (`node --test tests/*.test.js`):** **28 passed, 0 failed**.
-- **Frontend Production Build (`npm run build`):** **PASS** (`1,598` modules, main `414.49 kB`, charts `173.56 kB`).
-- **Live SmartAPI 5-Interval Verification (read-only after market close, `_candle_min_interval = 0.65s`):**
-  - `NIFTY` & `BANKNIFTY` across `1m` (`1092`), `5m` (`220`), `15m` (`275`), `1h` (`149`), `1d` (`247`) all returned `HTTP 200`, `source=live`, zero `403` rate-limit errors.
-  - Note on `quant_engine.validated_bars()` strictness: during post-close testing on `2026-11-26`, `15m` passed (`50` bars, `BULLISH`), while `1m`/`5m` reflected a real SmartAPI 5-minute feed gap at `15:15–15:19 IST` and `1h`/`1d` reflected `2026-11-24` (Guru Nanak Jayanti) not being configured in `EXCHANGE_HOLIDAYS`. Keeping strict validation intact ensures the engine fails closed (`NO_TRADE`) when broker bars or holiday calendars are incomplete.
-
-## 5. Known Limitations & Remaining Operator/Future Work
-
-1. **Exchange Holiday Configuration:** Configure `EXCHANGE_HOLIDAYS` in Render env vars so `quant_engine.expected_starts()` does not expect bars on NSE holidays.
-2. **Live Market Session Testing:** Live bid/ask spread validation, bar-boundary transitions, and auto-execution during active market hours (`09:15–15:30 IST`) remain pending until the next live market session. Keep `auto_execute` disabled until live-session validation passes.
-3. **Single Backend Worker:** Historical candle rate limiting (`_candle_lock`) and scheduler slots are process-local; keep a single Render worker active.
-4. **Offline Research Only:** `research_backtest.py` and `research_ml.py` require an operator-supplied historical options JSON dataset (`provenance: "historical_contract_ohlc"`) and `requirements-research.txt`; no ML model is deployed in production.
-
-## 6. Deployment & Rollback
-
-- **Deploy:** Push verified changes directly to `origin/main` (Render auto-deploys backend; Vercel auto-deploys frontend).
-- **Rollback:** `git checkout backup-pre-v5-hybrid-56ddbfb` (or `git revert <commit>`) and push to `main`. No database rollback needed since no schema migration was added.
-
-## 7. `pravin_g` Wallet Reconciliation Audit (27 November 2026)
-
-- **Account:** `username = pravin_g`, `user_id = 1`, `portfolio_id = 10` (`reset_baseline_present = false`, `active_count = 0`, `pending_count = 0`).
-- **Ledger Verification:** All `90` `paper_trades` are `CLOSED` (`53` `STOP_LOSS_HIT`, `34` `TARGET_HIT`, `3` `AUTO_SQUAREOFF_315PM`; all `BUY`), `gross_pnl - total_charges == realized_pnl` across all 90 rows (`0` arithmetic discrepancies), total `realized_pnl = -₹8,390.23`.
-- **Root Cause of `-₹36,564.37` Discrepancy:** Pre-QA-fix carryover on Portfolio `id=10`: on 25 Nov 2026 (`85` closed trades, `Trade P&L = -₹9,748.44`), `stored_cash` was `₹9,53,687.19` (`+₹7,970.38` cash surplus) alongside `₹44,534.75` of phantom orphan `margin_used` from earlier pre-lock settlement races. On 26 Nov 2026, `5` trades closed (`+₹1,358.21` net `realized_pnl`, bringing `Trade P&L` to `-₹8,390.23` and `stored_cash` to `₹9,55,045.40`), and `margin_used` was synced to actual open positions (`₹0.00`), turning `+₹7,970.38 - ₹44,534.75` into `-₹36,564.37`.
-- **Source-Code Status:** Current `paper_engine.py` uses atomic `_lock_portfolio` + `_settle_position` and passed all accounting/concurrency tests; no new source-code bug was introduced on 26 Nov (`+₹1,358.21` cash delta matched `5` Nov 26 trades to the paisa).
-- **`reconcile_wallet.py --user-id 1` Preview:** `initial_capital = 1000000.0`, `expected_cash = 991609.77`, `stored_cash = 955045.4`, `cash_adjustment = +36564.37`, `margin_adjustment = 0.0`, `issues = []`. Pending explicit user approval before `--apply`.
+## 3. Environment Variables & Safety Gates
+- Keep `V6_AUTO_EXECUTION_ENABLED=false` and `ALLOW_SIMULATED_TRADING=false` until live NSE session validation is completed with `EXCHANGE_HOLIDAYS` and `MCX_HOLIDAYS` configured.
+- Keep `BROKER_STREAM_ENABLED=true`, `BROKER_REST_FALLBACK=true`, `MCX_RESEARCH_ENABLED=true`, and 1 Render worker.
+- Rollback: `git checkout backup-pre-v6-308e7aa` (no DB rollback needed).

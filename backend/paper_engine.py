@@ -369,6 +369,8 @@ class PaperEngine:
         *, ai_evidence: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Place a paper trade order (Market, Limit, SL) linked to user."""
+        if str(order_req.get("underlying", "")).upper().strip().startswith(("MCX", "CRUDEOIL", "CRUDE OIL")) or str(order_req.get("symbol", "")).upper().startswith(("MCX", "CRUDEOIL")):
+            return {"status":"REJECTED", "reject_reason":"MCX research only; commodity execution disabled."}
         if order_req.get("replay"):
             return {"status": "REJECTED", "reject_reason": "Replay playback is available; replay trading is paused until an isolated ledger is implemented."}
         if (
@@ -547,7 +549,18 @@ class PaperEngine:
                 elif ai_evidence.get("auto_executed"):
                     if not self.entry_window_open():
                         return {**order, "status": "REJECTED", "reject_reason": "Market entry window closed before fill."}
-                    reason = trend_rejection(ai_evidence["snapshot"], order["option_type"], settings.AUTO_TREND_THRESHOLD_PCT)
+                    snap = ai_evidence["snapshot"]
+                    if snap.get('quant_version') == 'quant-v1':
+                        check = snap.get('execution_validation') or {}
+                        stamp = parse_time(check.get('quote_exchange_timestamp'))
+                        spot_stamp = parse_time(snap.get('spot_exchange_timestamp'))
+                        from quant_engine import snapshot_frames_current
+                        fill_now = datetime.now(IST)
+                        if (not check.get('eligible') or not stamp or not spot_stamp
+                            or not all(0 <= (fill_now-t).total_seconds() <= 30 for t in (stamp,spot_stamp))
+                            or not snapshot_frames_current(snap, fill_now, get_session_bounds)):
+                            return {**order, "status":"REJECTED", "reject_reason":"Validated option quote expired before database fill."}
+                    reason = trend_rejection(snap, order["option_type"], settings.AUTO_TREND_THRESHOLD_PCT)
                     if not reason:
                         reason = await guard_auto_fill(session, uid, order)
                 if reason:

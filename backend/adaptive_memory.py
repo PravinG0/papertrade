@@ -15,7 +15,7 @@ HEADER = '### EPISODIC TRADING MEMORY (LESSONS FROM RECENT LOSSES & WINS)'
 
 def parse_time(value):
     try:
-        d = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        d = datetime.fromisoformat(str(value).removesuffix(' IST').replace('Z', '+00:00'))
         return (d.replace(tzinfo=IST) if d.tzinfo is None else d.astimezone(IST))
     except (ValueError, TypeError):
         return None

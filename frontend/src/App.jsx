@@ -31,6 +31,8 @@ import {
 } from './api';
 import { Activity, Clock, Zap, ChevronDown, ChevronUp, CheckCircle2, AlertTriangle, Info, MessageSquare, History, Download, FileText } from 'lucide-react';
 
+const McxResearch = lazy(() => import('./components/McxResearch'));
+
 const PcrOiPanel = lazy(() => import('./components/PcrOiPanel'));
 
 const PnlHeatmap = lazy(() => import('./components/PnlHeatmap'));
@@ -382,7 +384,7 @@ export default function App() {
     syncReplayState();
     const refreshStatus = () =>
       getStatus()
-        .then((r) => setFeedInfo((f) => ({ ...f, marketOpen: Boolean(r.data?.market_open) })))
+        .then((r) => setFeedInfo((f) => ({ ...f, marketOpen: Boolean(r.data?.market_open), broker: r.data?.broker_stream, autoEnabled: r.data?.v6_auto_execution_enabled })))
         .catch(() => {});
     refreshStatus();
     const statusTimer = setInterval(refreshStatus, 30000);
@@ -776,12 +778,14 @@ export default function App() {
         </section>
 
         <section id="terminal-panel-chat" role="tabpanel" aria-labelledby="terminal-tab-chat" hidden={activeTab !== 'terminal' || terminalTab !== 'chat'} className="max-w-7xl mx-auto">
+          {feedInfo.autoEnabled === false && <div role="status" className="mb-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">V6 automatic execution paused pending broker and database verification. AI debates remain available.</div>}
           <DebateArena key={user?.id || 'guest'} selectedIndex={selectedIndex} onSelectIndex={(idx) => { setSelectedIndex(idx); setSelectedContract(null); }}
             onExecuteTrade={handleExecuteDebateTrade} onOpenHistory={openDebateHistory} onOpenChat={() => openTerminal('chat')}
             historyVisible={activeTab === 'terminal' && terminalTab === 'history' && historyView === 'debates'}
             onTradeChanged={(msg) => { if (msg) showToast(msg, 'success'); syncTradingState(); }} />
         </section>
 
+        {activeTab === 'mcx' && <Suspense fallback={<div className="p-4 text-slate-500">Loading MCX…</div>}><McxResearch signedIn={Boolean(user)} /></Suspense>}
         {/* Tab 2: OI & Greeks Analysis */}
         {activeTab === 'oi' && (
           <div className="max-w-6xl mx-auto">

@@ -1,18 +1,16 @@
-# TradeLab V5 Hybrid — Final QA Report
+# TradeLab Cloud V6 — Final QA Report
 
-**Date:** 26 November 2026
+**Date:** 27 November 2026  
+**Commit Base:** `308e7aa` (Backup tag: `backup-pre-v6-308e7aa`)
 
-## Test & Verification Summary
+## 1. Automated Test & Build Results
+- **Python Compilation (`py_compile`):** **PASSED** across all backend modules, agents, and tests.
+- **Full Backend `pytest` (`python3 -m pytest -q tests`):** **349 passed, 1 skipped, 0 failed** (`100.89s` on isolated temporary SQLite DBs; `test_ml_research_pipeline_on_synthetic_fixture` skipped because optional `scikit-learn` is not installed in runtime environment).
+  - Includes `test_cloud_v6_offline.py` (`47` V6 WebSocket/MCX/stream cases), `test_v6_complete.py` (Shadow Trading, Champion vs Challenger, Dynamic Risk Limits, MCX charges & isolated MCX paper trading), `test_quant_v5.py`, `test_v5_debate_integration.py`, `test_candle_resilience.py`, `test_adaptive_integration.py`, and all existing accounting/settlement/concurrency tests.
+- **Frontend Unit Tests (`node --test tests/*.test.js`):** **28 passed, 0 failed**.
+- **Frontend Production Build (`npm run build`):** **PASSED** (`1,599` modules, main `420.32 kB`, charts `173.56 kB`, `McxResearch` `12.77 kB`).
 
-1. **Python Compilation:** `python3 -m py_compile backend/*.py backend/agents/*.py backend/tests/*.py` — **PASS**.
-2. **Backend Automated Suite (`python3 -m pytest -v tests`):** **303 passed, 1 skipped** (isolated temp SQLite DBs; `test_ml_research_pipeline_on_synthetic_fixture` skipped due to optional `scikit-learn` not installed in runtime environment).
-   - Covers `test_quant_v5.py`, `test_v5_debate_integration.py`, `test_candle_resilience.py`, `test_adaptive_integration.py`, `test_adaptive_memory.py`, `test_audit_integration.py`, `test_audit_offline.py`, `test_engine.py`, `test_offline_core.py`, `test_qa_hardening.py`, `test_qa_repairs_offline.py`, `test_regression_fixes.py`, `test_wallet_accounting.py`, `test_wallet_settlement.py`.
-3. **Frontend Unit Tests (`node --test tests/*.test.js`):** **28 passed, 0 failed**.
-4. **Frontend Production Build (`npm run build`):** **PASS** (1,598 modules, `414.49 kB` main bundle).
-5. **Live Angel One SmartAPI 5-Interval Check (`NIFTY` & `BANKNIFTY`):**
-   - Initially tripped `HTTP 403` on the 6th back-to-back historical call (`BANKNIFTY 1m`) at `0.45s` pacing.
-   - Tuned `_candle_min_interval` to `0.65s` in `angel_service.py`; re-test across all 10 calls (`1m`, `5m`, `15m`, `1h`, `1d` for `NIFTY` and `BANKNIFTY`) returned `HTTP 200`, `source=live`, `err=None`.
-   - Observed that `quant_engine.validated_bars()` strictly blocks when an exchange holiday (`2026-11-24`) is absent from `EXCHANGE_HOLIDAYS` or when SmartAPI has a feed gap (`15:15–15:19 IST` on `2026-11-26`), confirming fail-closed safety.
-
-## Pending Live-Market Checks
-- Active market-session (`09:15–15:30 IST`) validation of live bid/ask option spreads, bar-boundary transitions, and automatic execution remains pending until market open. Keep `auto_execute` disabled until verified live.
+## 2. Live Integration Results (27 Nov 2026, 21:51 IST)
+- **Angel One WebSocket 2.0 (`wss://smartapisocket.angelone.in/smart-stream`):** **PASSED** (`connected=True`, `error=None`, `reconnects=0`; live binary ticks decoded for `MCX` `CRUDEOIL18DEC26FUT` `576264` and `CRUDEOIL16DEC267800PE` `586071` matching REST `÷100` price scaling).
+- **MCX Crude Oil Contract & Candle Verification:** **PASSED** (`1,100` CRUDEOIL contracts parsed, `775` live 5m candles, `09:00–23:55 IST` winter session bounds).
+- **Live NSE Session Testing:** **PENDING** next NSE market open (`09:15–15:30 IST`); keep `V6_AUTO_EXECUTION_ENABLED=false` until verified live.

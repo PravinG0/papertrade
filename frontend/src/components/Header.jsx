@@ -115,17 +115,15 @@ export default function Header({
                 <PlayCircle size={14} className="text-amber-400" />
                 <span>REPLAY MODE ({replayState.current_date || 'Historical'})</span>
               </div>
-            ) : feedInfo.source === 'live' ? (
+            ) : !feedInfo.marketOpen || feedInfo.source === 'live' ? (
               <div
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] sm:text-xs font-semibold ${
                   feedInfo.marketOpen
-                    ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                    ? (feedInfo.broker?.connected ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300' : 'bg-cyan-950/60 border-cyan-500/40 text-cyan-300')
                     : 'bg-slate-900 border-slate-600/60 text-slate-300'
                 }`}
                 title={
-                  feedInfo.marketOpen
-                    ? 'Real-time Angel One prices'
-                    : 'Market closed - showing the last traded Angel One prices'
+                  `Feed: ${feedInfo.broker?.connected ? 'WebSocket' : 'REST'} · Connected: ${feedInfo.broker?.connected ? 'Yes' : 'No'} · Reconnects: ${feedInfo.broker?.reconnects ?? 0} · Age: ${feedInfo.broker?.last_tick_age_seconds ?? '—'}s · Exchange: ${feedInfo.broker?.last_exchange_timestamp || '—'}`
                 }
               >
                 <span className="relative flex h-2 w-2">
@@ -138,19 +136,29 @@ export default function Header({
                     }`}
                   ></span>
                 </span>
-                <span>{feedInfo.marketOpen ? 'LIVE' : 'MARKET CLOSED'}</span>
+                <span>
+                  {!feedInfo.marketOpen
+                    ? 'MARKET CLOSED'
+                    : feedInfo.broker?.connected
+                    ? `LIVE · WS (${feedInfo.broker?.last_tick_age_seconds ?? 0}s)`
+                    : 'LIVE · REST'}
+                </span>
               </div>
             ) : (
               <div
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-950/70 border border-amber-500/60 text-amber-300 text-[11px] sm:text-xs font-semibold"
-                title={
-                  feedInfo.source === 'stale'
-                    ? 'Feed unavailable or delayed; prices may be old'
-                    : 'Angel One is not connected - prices are simulated and will not match your broker'
-                }
+                title={`Source: ${feedInfo.source || 'unavailable'} · Stream: ${feedInfo.broker?.connected ? 'connected' : 'disconnected'} · Reconnects: ${feedInfo.broker?.reconnects ?? 0}`}
               >
                 <span>⚠</span>
-                <span>{feedInfo.source === 'stale' ? 'FEED DELAYED' : 'SIMULATED DATA'}</span>
+                <span>
+                  {feedInfo.source === 'simulated'
+                    ? 'SIMULATED'
+                    : feedInfo.source === 'stale'
+                    ? 'STALE'
+                    : feedInfo.broker?.connected === false && feedInfo.source === 'unavailable'
+                    ? 'DISCONNECTED · UNAVAILABLE'
+                    : 'DELAYED / UNAVAILABLE'}
+                </span>
               </div>
             )}
           </div>
@@ -382,6 +390,7 @@ export default function Header({
             <span>P&L Journal</span>
           </button>
 
+          <button onClick={() => setActiveTab('mcx')} className={`px-3 py-1.5 rounded-lg font-semibold ${activeTab === 'mcx' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'}`}>MCX</button>
           <button
             onClick={() => setActiveTab('payoff')}
             className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all ${

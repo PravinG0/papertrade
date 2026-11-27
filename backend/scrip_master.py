@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from config import settings
+from mcx_market import CommodityContract, parse_contract
 
 logger = logging.getLogger("scrip_master")
 IST = ZoneInfo("Asia/Kolkata")
@@ -51,6 +52,7 @@ class ScripMaster:
         self._expiries: dict[str, list[str]] = {}
         self._strikes: dict[tuple[str, str], list[int]] = {}
         self._loaded_on: Optional[date] = None
+        self._mcx_contracts: list[CommodityContract] = []
         self._lock = asyncio.Lock()
         self._next_retry: float = 0.0
 
@@ -104,7 +106,11 @@ class ScripMaster:
         data = json.loads(p.read_text(encoding="utf-8"))
         if data.get("date") != self._today().isoformat():
             return None
-        return data.get("rows")
+        rows = data.get("rows")
+        # Existing same-day caches may predate MCX support; force a one-time refresh.
+        if settings.MCX_RESEARCH_ENABLED and not any(len(r)==9 and r[0]=='CRUDEOIL' for r in (rows or [])):
+            return None
+        return rows
 
     def _read_any_cache(self) -> Optional[list]:
         p = self._cache_path()
@@ -152,6 +158,11 @@ class ScripMaster:
         today = self._today()
         out: list = []
         for it in json.loads(raw):
+            if settings.MCX_RESEARCH_ENABLED and it.get("name") == "CRUDEOIL":
+                c = parse_contract(it, today)
+                if c:
+                    out.append([c.name,c.expiry,c.strike,c.option_type,c.exchange,c.token,c.symbol,c.lot_size,c.tick_size])
+                continue
             if it.get("instrumenttype") != "OPTIDX":
                 continue
             name = it.get("name")
@@ -180,16 +191,28 @@ class ScripMaster:
         by_symbol: dict = {}
         expiries: dict[str, set[str]] = {}
         strikes: dict[tuple[str, str], set[int]] = {}
-        for name, exp, strike, opt, exch, token, sym, lot in rows:
+        commodities = []
+        for row in rows:
+            if len(row)==9 and row[0]=='CRUDEOIL' and row[4]=='MCX':
+                commodities.append(CommodityContract(*row))
+                continue
+            if len(row)!=8:
+                continue
+            name, exp, strike, opt, exch, token, sym, lot = row
             c = Contract(name, exp, int(strike), opt, exch, token, sym, int(lot))
             by_key[(name, exp, c.strike, opt)] = c
             by_symbol[sym] = c
             expiries.setdefault(name, set()).add(exp)
             strikes.setdefault((name, exp), set()).add(c.strike)
+        self._mcx_contracts = commodities
         self._by_key = by_key
         self._by_symbol = by_symbol
         self._expiries = {k: sorted(v) for k, v in expiries.items()}
         self._strikes = {k: sorted(v) for k, v in strikes.items()}
+
+    def mcx_contracts(self) -> list[CommodityContract]:
+        # Never expose stale contract metadata for commodity research.
+        return list(self._mcx_contracts) if self._loaded_on == self._today() else []
 
     # ── Lookups ──────────────────────────────────────────────────────────
     def expiries(self, name: str) -> list[str]:

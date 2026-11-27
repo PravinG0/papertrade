@@ -25,6 +25,7 @@ import {
   ShoppingCart,
   Percent,
 } from 'lucide-react';
+import api from '../api';
 import {
   runDebate,
   getLatestDebate,
@@ -295,6 +296,34 @@ export default function DebateArena({
   const [marketHoursOnly, setMarketHoursOnly] = useState(true);
   const [schedulerInfo, setSchedulerInfo] = useState({});
   const [retryCooldownSec, setRetryCooldownSec] = useState(0);
+  const [shadowSummary, setShadowSummary] = useState(null);
+  const [riskConfig, setRiskConfig] = useState(null);
+  const [riskSaving, setRiskSaving] = useState(false);
+
+  const loadShadowAndRisk = useCallback(async () => {
+    try {
+      const [sRes, rRes] = await Promise.all([api.get('/shadow/summary'), api.get('/risk/settings')]);
+      setShadowSummary(sRes.data || null);
+      setRiskConfig(rRes.data || null);
+    } catch {
+      // ignore if guest or offline
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isAuthenticated) loadShadowAndRisk();
+  }, [isAuthenticated, debate?.id, loadShadowAndRisk]);
+
+  const handleSaveRisk = async (patch) => {
+    if (!isAuthenticated) return;
+    setRiskSaving(true);
+    try {
+      const res = await api.put('/risk/settings', patch);
+      setRiskConfig(res.data || null);
+    } finally {
+      setRiskSaving(false);
+    }
+  };
 
   useEffect(() => {
     if (retryCooldownSec <= 0) return undefined;
@@ -956,6 +985,89 @@ export default function DebateArena({
             debateTimestamp={debate?.timestamp}
           />
 
+          {debate.quantitative_validation && (
+            <details open className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 sm:p-4 text-ink shadow-sm">
+              <summary className="cursor-pointer text-sm font-bold text-ink">Quantitative validation · {debate.quantitative_validation.eligible ? 'Direction & option checks passed' : 'NO TRADE / blocked'}</summary>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
+                <span>AI proposal: <strong className="text-ink">{debate.original_judge_verdict || judge.verdict}</strong></span>
+                <span>· Regime: <strong className="text-ink">{snapshot.market_regime || 'UNKNOWN'}</strong></span>
+                <span>· {snapshot.spot_fresh ? 'Fresh exchange spot' : 'Spot freshness unverified'}</span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                {['1d','1h','15m','5m','1m'].map(frame => {
+                  const f = snapshot.timeframes?.[frame];
+                  return <div key={frame} className="min-w-0 rounded-lg border border-slate-200 p-2 text-xs" title={f?.reason || 'Completed candle analysis'}>
+                    <div className="font-semibold text-slate-300">{frame}</div>
+                    <div className={'mt-1 break-words font-bold ' + (f?.direction === 'BULLISH' ? 'text-emerald-700' : f?.direction === 'BEARISH' ? 'text-rose-700' : 'text-slate-300')}>{f?.direction || 'UNKNOWN'}</div>
+                    <div className="mt-1 text-slate-400">{f?.count ?? 0} bars</div>
+                  </div>;
+                })}
+              </div>
+              {!!debate.quantitative_validation.reasons?.length && <ul className="mt-3 space-y-1 text-xs text-amber-800">{debate.quantitative_validation.reasons.map((r,i) => <li key={i}>• {r}</li>)}</ul>}
+              {debate.quantitative_validation.option && <div className="mt-3 text-xs text-slate-300">One-lot preview · Spread {debate.quantitative_validation.option.metrics?.spread_pct ?? 'N/A'}% · Net reward/risk {debate.quantitative_validation.option.metrics?.net_rr ?? 'N/A'} · Model delta {debate.quantitative_validation.option.greeks_estimate?.delta ?? 'N/A'}</div>}
+              {debate.execution_validation && <div className="mt-2 text-xs text-slate-300">Execution recheck · {debate.execution_validation.eligible ? 'Passed' : 'Blocked'} · Net reward/risk {debate.execution_validation.metrics?.net_rr ?? 'N/A'}</div>}
+              <p className="mt-3 text-xs text-slate-400">Rule-based validation is not a probability or guarantee of profit. Old debates remain unchanged.</p>
+            </details>
+          )}
+          {isAuthenticated && riskConfig && (
+            <details className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 sm:p-4 text-ink shadow-sm">
+              <summary className="cursor-pointer select-none text-sm font-bold text-ink">
+                Dynamic Risk Limits · {riskConfig.no_count_limit ? 'No daily count limit (risk limits active)' : `Max ${riskConfig.max_daily_trades} auto trades/day`}
+              </summary>
+              <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <label className="space-y-1">
+                  <span className="block text-slate-300 font-semibold">Max Daily Trades</span>
+                  <input type="number" min="0" max="50" disabled={riskSaving || riskConfig.no_count_limit}
+                    value={riskConfig.max_daily_trades}
+                    onChange={(e) => handleSaveRisk({ max_daily_trades: Number(e.target.value) })}
+                    className="w-full rounded border border-slate-200 px-2 py-1 text-ink bg-white" />
+                </label>
+                <label className="space-y-1">
+                  <span className="block text-slate-300 font-semibold">Max Daily Loss (₹)</span>
+                  <input type="number" min="500" step="250" disabled={riskSaving}
+                    value={riskConfig.max_daily_loss_inr}
+                    onChange={(e) => handleSaveRisk({ max_daily_loss_inr: Number(e.target.value) })}
+                    className="w-full rounded border border-slate-200 px-2 py-1 text-ink bg-white" />
+                </label>
+                <label className="space-y-1">
+                  <span className="block text-slate-300 font-semibold">Max Concurrent Pos</span>
+                  <input type="number" min="1" max="10" disabled={riskSaving}
+                    value={riskConfig.max_concurrent_positions}
+                    onChange={(e) => handleSaveRisk({ max_concurrent_positions: Number(e.target.value) })}
+                    className="w-full rounded border border-slate-200 px-2 py-1 text-ink bg-white" />
+                </label>
+                <label className="flex items-center gap-2 pt-4 cursor-pointer">
+                  <input type="checkbox" disabled={riskSaving}
+                    checked={Boolean(riskConfig.no_count_limit)}
+                    onChange={(e) => handleSaveRisk({ no_count_limit: e.target.checked })} />
+                  <span className="text-ink font-semibold">Experiment: No Count Limit</span>
+                </label>
+              </div>
+            </details>
+          )}
+          {isAuthenticated && shadowSummary && (
+            <details className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 sm:p-4 text-ink shadow-sm">
+              <summary className="cursor-pointer select-none text-sm font-bold text-ink">
+                Shadow Research · Champion vs Challenger ({shadowSummary.opportunities_total} opportunities)
+              </summary>
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                {['champion', 'challenger'].map((k) => {
+                  const s = shadowSummary[k] || {};
+                  return (
+                    <div key={k} className="rounded-lg border border-slate-200 p-3 space-y-1">
+                      <div className="font-bold uppercase text-ink">{k === 'champion' ? 'Champion (Original AI)' : 'Challenger (V6 Quant)'}</div>
+                      <div className="text-slate-300">Closed: <strong className="text-ink">{s.closed_count ?? 0}</strong> · Open: <strong className="text-ink">{s.open_count ?? 0}</strong> · Win Rate: <strong className="text-ink">{s.win_rate ?? 0}%</strong></div>
+                      <div className="text-slate-300">Net P&L: <strong className={Number(s.net_pnl) >= 0 ? 'text-emerald-700' : 'text-rose-700'}>₹{Number(s.net_pnl || 0).toFixed(2)}</strong> · PF: <strong className="text-ink">{s.profit_factor ?? 0}</strong> · Max DD: <strong className="text-ink">₹{Number(s.max_drawdown || 0).toFixed(2)}</strong></div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
+                <span>Accepted: {shadowSummary.accepted_count} · Rejected: {shadowSummary.rejected_count} (isolated from primary wallet)</span>
+                <button type="button" onClick={async () => { const r = await api.post('/shadow/settle'); setShadowSummary(r.data); }} className="px-2.5 py-1 rounded bg-cyan-600 text-white font-semibold">Settle Open</button>
+              </div>
+            </details>
+          )}
           {debate.episodic_memory && (
             <details className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 sm:p-4 text-ink shadow-sm">
               <summary className="cursor-pointer select-none text-sm font-bold text-ink">Adaptive learning memory · Context for all three agents</summary>

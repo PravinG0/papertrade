@@ -36,6 +36,21 @@ class Settings(BaseSettings):
     ANGEL_PIN: str = Field(default="")
     ANGEL_TOTP_SECRET: str = Field(default="")
 
+    # Cloud V6: one broker stream per process; turn off for REST-only rollback.
+    BROKER_STREAM_ENABLED: bool = Field(default=True)
+    BROKER_REST_FALLBACK: bool = Field(default=True)
+    BROKER_STREAM_MAX_SUBSCRIPTIONS: int = Field(default=300, ge=10, le=1000)
+    BROKER_QUOTE_MAX_AGE_SECONDS: float = Field(default=10.0, gt=0, le=30)
+    V6_AUTO_EXECUTION_ENABLED: bool = Field(default=False)
+    MCX_RESEARCH_ENABLED: bool = Field(default=True)
+    # Confirm this date and exchange session before enabling any MCX execution.
+    MCX_SESSION_OPEN: str = Field(default="09:00")
+    MCX_SESSION_CLOSE: str = Field(default="23:55")
+    MCX_SESSION_VALID_FROM: str = Field(default="2026-11-02")
+    MCX_SESSION_VALID_UNTIL: str = Field(default="2027-03-12")
+    MCX_HOLIDAYS: str = Field(default="")
+    MCX_SPECIAL_SESSIONS: str = Field(default="")
+
     # ── Paper Trading Wallet Defaults ─────────────────────────────────────
     VIRTUAL_STARTING_CAPITAL: float = Field(default=1000000.0)  # Default 10,00,000 INR (10 Lakhs)
     DEFAULT_STRIKES: int = Field(default=10)                    # ATM ± 10 strikes (21 total)
@@ -87,6 +102,11 @@ class Settings(BaseSettings):
     # Adaptive paper-trading memory and hard risk rules
     MEMORY_SHORT_DAYS: int = Field(default=5, ge=1, le=30)
     MEMORY_LONG_DAYS: int = Field(default=30, ge=5, le=90)
+    MEMORY_EXTENDED_DAYS: int = Field(default=90, ge=30, le=90)
+    QUANT_MIN_CONFIDENCE: int = Field(default=8, ge=1, le=10)
+    QUANT_MIN_NET_RR: float = Field(default=1.5, gt=0, le=10)
+    QUANT_MAX_SPREAD_PCT: float = Field(default=2.0, gt=0, le=20)
+    QUANT_MAX_VERDICT_AGE_SECONDS: int = Field(default=180, ge=30, le=600)
     AUTO_MAX_DAILY_TRADES: int = Field(default=5, ge=1, le=100)
     AUTO_REPEAT_STRIKE_COOLDOWN_MINUTES: int = Field(default=30, ge=1, le=1440)
     AUTO_TREND_THRESHOLD_PCT: float = Field(default=0.75, gt=0, le=10)
@@ -207,6 +227,8 @@ def normalize_index_symbol(symbol: str) -> str:
     if not symbol:
         return "NIFTY"
     clean = symbol.strip().upper()
+    if clean.startswith(('MCX', 'CRUDEOIL', 'CRUDE OIL')):
+        raise ValueError('MCX uses the dedicated research market endpoint; index trading is not supported.')
     if clean in INDEX_CONFIG:
         return clean
     if clean in SYMBOL_ALIASES:

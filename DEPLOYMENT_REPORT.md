@@ -1,14 +1,14 @@
-# TradeLab V5 Hybrid — Deployment Report
+# TradeLab Cloud V6 — Deployment & Render Free Compatibility Report
 
-**Date:** 26 November 2026
+**Date:** 27 November 2026
 
 ## Deployment Targets
-- **GitHub Branch:** `main` (Backup tag created before merge: `backup-pre-v5-hybrid-56ddbfb`)
-- **Backend (Render):** `https://papertrade-1-uv24.onrender.com`
+- **GitHub Branch:** `main` (Backup tag: `backup-pre-v6-308e7aa`)
+- **Backend (Render Free):** `https://papertrade-1-uv24.onrender.com` (1 worker)
 - **Frontend (Vercel):** `https://papertrade-ebon.vercel.app`
-- **Database (Supabase PostgreSQL):** Connected via `DATABASE_URL` (no V5 migration required)
+- **Database (Supabase PostgreSQL):** Connected via `DATABASE_URL` (`pooler.supabase.com:6543`)
 
-## Operator Recommendations
-1. Set `EXCHANGE_HOLIDAYS` in Render environment variables (comma-separated `YYYY-MM-DD` NSE holidays, e.g. `2026-11-24,...`) so `1h`/`1d` completed-bar checks remain accurate across holidays.
-2. Keep a single Render backend worker active so in-process SmartAPI rate limiting and scheduler slot locks remain serialized.
-3. Keep `auto_execute` disabled in the Debate Scheduler until live market-hours (`09:15–15:30 IST`) validation is completed.
+## Render Free Hosting Considerations
+- Render Free may spin down after inactivity; outbound Angel One WebSocket (`BrokerStream`) does not prevent Render Free from sleeping on zero inbound HTTP traffic.
+- On restart/cold start, `BrokerStream.ensure_running()` re-authenticates via `angel_service.authenticate()` and resubscribes active instruments; primary `paper_trades`, `mcx-paper:<uid>`, `shadow-ledger:<uid>`, and `risk-config:<uid>` persist in Supabase PostgreSQL.
+- Keep `V6_AUTO_EXECUTION_ENABLED=false` until live NSE market-hours validation passes.

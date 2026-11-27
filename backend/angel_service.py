@@ -25,6 +25,8 @@ import httpx
 import pyotp
 
 from config import INDEX_CONFIG, normalize_index_symbol, settings
+from broker_stream import BrokerStream
+from mcx_market import configured_mcx_bounds
 from greeks import BlackScholesEngine, calculate_max_pain, calculate_pcr
 from scrip_master import Contract, scrip_master
 
@@ -95,6 +97,12 @@ class AngelService:
         # tokens somebody asked for recently: token -> (exchange, last_requested_epoch)
         self._watch: dict[str, tuple[str, float]] = {}
         self._refresher: Optional[asyncio.Task] = None
+        self.stream = BrokerStream(self, settings.BROKER_STREAM_ENABLED, settings.BROKER_STREAM_MAX_SUBSCRIPTIONS)
+        self._rest_quote_cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+        self._fallback_lock = asyncio.Lock()
+        self._quote_cooldown_until = 0.0
+        self._rest_requests = 0
+        self._rest_attempts = {}
 
     @classmethod
     def get_instance(cls) -> AngelService:
@@ -121,6 +129,8 @@ class AngelService:
             self._loop = loop
             self._auth_lock = asyncio.Lock()
             self._candle_lock = asyncio.Lock()
+            self._quote_lock = asyncio.Lock()
+            self._fallback_lock = asyncio.Lock()
             self._candle_inflight = {}
             if self._client is not None and not self._client.is_closed:
                 self._client = None
@@ -133,7 +143,11 @@ class AngelService:
         return self._client
 
     async def close(self) -> None:
-        """Cleanly close underlying HTTP client."""
+        """Cleanly close streaming and underlying HTTP client."""
+        await self.stream.close()
+        if self._refresher:
+            self._refresher.cancel()
+            await asyncio.gather(self._refresher, return_exceptions=True)
         if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
             self._client = None
@@ -209,7 +223,7 @@ class AngelService:
     @property
     def data_source(self) -> str:
         """'live' when Angel One quotes were fetched in the last 30s, else 'simulated'."""
-        return "live" if (time.time() - self._last_live_ok) < 30.0 else "simulated"
+        return "live" if (time.time() - self._last_live_ok) < settings.BROKER_QUOTE_MAX_AGE_SECONDS else ("stale" if self.is_configured() else "unavailable")
 
     async def fetch_quotes(self, exchange_tokens: dict[str, list[str]]) -> dict[str, dict[str, Any]]:
         """Throttled SmartAPI FULL-mode quote call. Returns {symbolToken: item}. Never raises."""
@@ -217,6 +231,8 @@ class AngelService:
         if not exchange_tokens or not await self.authenticate():
             return {}
         async with self._quote_lock:
+            if time.time() < self._quote_cooldown_until:
+                return {}
             wait = self._last_quote_ts + 1.05 - time.time()
             if wait > 0:
                 await asyncio.sleep(wait)
@@ -224,6 +240,7 @@ class AngelService:
             headers["Authorization"] = f"Bearer {self._jwt_token}"
             try:
                 client = await self.get_http_client()
+                self._rest_requests += 1
                 resp = await client.post(
                     "https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/",
                     json={"mode": "FULL", "exchangeTokens": exchange_tokens},
@@ -231,7 +248,11 @@ class AngelService:
                 )
                 self._last_quote_ts = time.time()
                 if resp.status_code != 200:
-                    logger.warning("Quote API HTTP %s: %s", resp.status_code, resp.text[:120])
+                    logger.warning("Quote API HTTP %s", resp.status_code)
+                    if resp.status_code == 401:
+                        self._token_expiry_epoch = 0.0
+                    if resp.status_code in (403, 429):
+                        self._quote_cooldown_until = time.time() + self._parse_retry_after(resp, 15.0)
                     return {}
                 data = resp.json()
                 if data.get("status") is not True:
@@ -244,9 +265,15 @@ class AngelService:
                 now = time.time()
                 for item in (data.get("data") or {}).get("fetched") or []:
                     tok = str(item.get("symbolToken", ""))
-                    if tok:
-                        out[tok] = item
-                        self._tok_cache[tok] = (now, item)
+                    matches = [ex for ex, tokens in exchange_tokens.items() if tok in tokens]
+                    ex = str(item.get("exchange") or (matches[0] if len(matches) == 1 else "")).upper()
+                    if ex not in matches:
+                        continue
+                    item = dict(item, exchange=ex, _transport="rest")
+                    if not self._quote_is_current(item, settings.BROKER_QUOTE_MAX_AGE_SECONDS):
+                        continue
+                    out[tok] = item
+                    self._rest_quote_cache[(ex, tok)] = (now, item)
                 if out:
                     self._last_live_ok = now
                 return out
@@ -255,71 +282,75 @@ class AngelService:
                 logger.warning("Quote fetch failed: %s", exc)
                 return {}
 
-    def _ensure_refresher(self) -> None:
-        if not self.is_configured():
-            return
-        if self._refresher is None or self._refresher.done():
-            self._refresher = asyncio.create_task(self._refresh_loop())
+    @classmethod
+    def _quote_is_current(cls, item, max_age):
+        """An HTTP response receipt time is not an exchange timestamp."""
+        try:
+            dt = cls._parse_exchange_quote_time(item)
+            age = (datetime.now(tz=IST) - dt).total_seconds() if dt else float("inf")
+            price = float(item.get("ltp") or 0)
+            return math.isfinite(price) and price > 0 and -2 <= age <= max_age
+        except (TypeError, ValueError, AttributeError, OverflowError):
+            return False
 
-    async def _refresh_loop(self) -> None:
-        """Keep recently-requested quotes warm in ONE paced stream.
+    def stream_status(self):
+        return {**self.stream.status(), "rest_requests": self._rest_requests,
+                "rest_fallback_enabled": settings.BROKER_REST_FALLBACK,
+                "quote_max_age_seconds": settings.BROKER_QUOTE_MAX_AGE_SECONDS}
 
-        Angel allows ~1 quote request/second. Without this, the index poll, option-chain poll,
-        position tracker and every browser tab queued behind that limit (chain calls took 10-15s).
-        Now API calls read the warm cache; this loop is the only steady caller.
+    async def get_token_quotes(self, items: list[tuple[str, str]], ttl: float = 4.0) -> dict[str, dict[str, Any]]:
+        """Stream first, bounded paced REST recovery only for missing fresh quotes.
+        Legacy callers return a token-keyed map; refuse ambiguous tokens across exchanges.
         """
-        idle_since = time.time()
-        while True:
-            try:
+        self._ensure_loop()
+        items = list(dict.fromkeys((str(ex).upper(), str(tok)) for ex, tok in items if tok))
+        token_exchanges = {}
+        for ex, tok in items:
+            token_exchanges.setdefault(tok, set()).add(ex)
+        items = [(ex, tok) for ex, tok in items if len(token_exchanges[tok]) == 1]
+        if not items or not self.is_configured():
+            return {}
+        if self.stream.enabled:
+            self.stream.watch(items)
+        max_age = settings.BROKER_QUOTE_MAX_AGE_SECONDS
+        result = {}
+        def lookup():
+            missing = []
+            for ex, tok in items:
+                q = self.stream.get(ex, tok, max_age=max_age) if self.stream.enabled else None
+                if q is None:
+                    cached = self._rest_quote_cache.get((ex, tok))
+                    if cached and time.time()-cached[0] < max(ttl, 2.0) and self._quote_is_current(cached[1], max_age):
+                        q = cached[1]
+                if q is not None and self._quote_is_current(q, max_age):
+                    result[tok] = q.copy()
+                else:
+                    result.pop(tok, None)
+                    missing.append((ex,tok))
+            return missing
+        missing = lookup()
+        if missing and self.stream.enabled and self.stream.connected:
+            # Give newly subscribed contracts a chance to receive their first tick.
+            await asyncio.sleep(.25)
+            missing = lookup()
+        if missing and (not self.stream.enabled or settings.BROKER_REST_FALLBACK):
+            async with self._fallback_lock:
+                missing = lookup()  # a concurrent reader may already have recovered them
                 now = time.time()
-                self._watch = {t: v for t, v in self._watch.items() if now - v[1] < 30.0}
-                if not self._watch:
-                    if now - idle_since > 60.0:
-                        return  # nobody is looking; restarts on the next request
-                    await asyncio.sleep(1.0)
-                    continue
-                idle_since = now
-
-                stalest_first = sorted(
-                    self._watch.items(), key=lambda kv: self._tok_cache.get(kv[0], (0.0, None))[0]
-                )
-                batch = stalest_first[:50]
-                age = now - self._tok_cache.get(batch[0][0], (0.0, None))[0]
-                if age < 1.0:
-                    await asyncio.sleep(0.4)
-                    continue
-                by_exch: dict[str, list[str]] = {}
-                for tok, (exch, _) in batch:
-                    by_exch.setdefault(exch, []).append(tok)
-                got = await self.fetch_quotes(by_exch)
-                if not got:
-                    await asyncio.sleep(2.0)  # API error / rate-limited: back off
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.debug("quote refresher error: %s", exc)
-                await asyncio.sleep(2.0)
-
-    async def get_token_quotes(
-        self, items: list[tuple[str, str]], ttl: float = 4.0
-    ) -> dict[str, dict[str, Any]]:
-        """Quotes for [(exchange, token), ...]: warm cache first, direct fetch only for misses."""
+                self._rest_attempts = {k:v for k,v in self._rest_attempts.items() if now-v<60}
+                missing = [k for k in missing if now-self._rest_attempts.get(k,0)>=2.0]
+                for i in range(0, min(len(missing),100), 50):
+                    group = {}
+                    for ex,tok in missing[i:i+50]:
+                        group.setdefault(ex, []).append(tok)
+                        self._rest_attempts[(ex,tok)] = time.time()
+                    await self.fetch_quotes(group)
+                lookup()
+        if result:
+            self._last_live_ok = time.time()
+        # Bound idle REST cache independently of stream subscriptions.
         now = time.time()
-        for exch, tok in items:
-            self._watch[tok] = (exch, now)
-        self._ensure_refresher()
-        result: dict[str, dict[str, Any]] = {}
-        missing: dict[str, list[str]] = {}
-        for exch, tok in items:
-            hit = self._tok_cache.get(tok)
-            if hit and now - hit[0] < ttl:
-                result[tok] = hit[1]
-            else:
-                missing.setdefault(exch, []).append(tok)
-        for exch, toks in missing.items():
-            for i in range(0, len(toks), 50):
-                got = await self.fetch_quotes({exch: toks[i:i + 50]})
-                result.update(got)
+        self._rest_quote_cache = {k:v for k,v in self._rest_quote_cache.items() if now-v[0]<60}
         return result
 
     # ── Spot Indices ─────────────────────────────────────────────────────────
@@ -368,7 +399,9 @@ class AngelService:
                 "net_change": round(net_chg, 2),
                 "percent_change": round(pct_chg, 2),
                 "timestamp": datetime.now(tz=IST).isoformat(),
+                "exchange_timestamp": (exchange_time.isoformat() if (exchange_time := self._parse_exchange_quote_time(item)) else None),
                 "source": "live",
+                "transport": item.get("_transport", "rest"),
             }
             quotes_by_sym[sym_key] = entry
             self._spot_cache[sym_key] = (now, entry)
@@ -382,14 +415,17 @@ class AngelService:
             if cached and cached[1].get("source") in ("live", "stale"):
                 # Keep the last REAL price (flagged stale) rather than inventing one.
                 stale = cached[1].copy()
-                stale["source"] = "stale" if now - cached[0] > 10.0 else "live"
+                stale["source"] = "stale"
                 result.append(stale)
             elif cached and now - cached[0] < 30.0:
                 result.append(cached[1].copy())
+            elif settings.ALLOW_SIMULATED_TRADING and not self.is_configured():
+                result.append(self._generate_fallback_spot(sym_key))
             else:
-                fallback = self._generate_fallback_spot(sym_key)
-                self._spot_cache[sym_key] = (now, fallback)
-                result.append(fallback)
+                spec = INDEX_CONFIG[sym_key]
+                result.append({"symbol": sym_key, "name": spec["name"], "ltp": None,
+                               "net_change": None, "percent_change": None,
+                               "exchange_timestamp": None, "source": "unavailable"})
         return result
 
     def _generate_fallback_spot(self, symbol: str) -> dict[str, Any]:
@@ -425,8 +461,12 @@ class AngelService:
         spots = await self.get_spot_indices()
         for s in spots:
             if s["symbol"] == sym_norm:
-                return float(s["ltp"])
-        return INDEX_CONFIG.get(sym_norm, INDEX_CONFIG["NIFTY"])["default_spot"]
+                if s.get("ltp") and s.get("source") == "live":
+                    return float(s["ltp"])
+                if settings.ALLOW_SIMULATED_TRADING and not self.is_configured() and s.get("ltp"):
+                    return float(s["ltp"])
+                raise ValueError(f"Fresh spot quote unavailable for {sym_norm}")
+        raise ValueError(f"Spot quote unavailable for {sym_norm}")
 
     # ── Historical Candles ───────────────────────────────────────────────────
 
@@ -490,7 +530,7 @@ class AngelService:
                 continue
             if o_f <= 0 or h_f <= 0 or l_f <= 0 or c_f <= 0 or v_f < 0:
                 continue
-            if h_f < l_f:
+            if h_f < max(o_f, c_f) or l_f > min(o_f, c_f):
                 continue
 
             parsed.append({
@@ -547,6 +587,7 @@ class AngelService:
     def _assess_candle_freshness(
         candles: list[dict[str, Any]],
         angel_interval: str = "FIVE_MINUTE",
+        exchange: str = "NSE",
     ) -> tuple[bool, Optional[int], Optional[str], Optional[str]]:
         """Return (is_fresh, last_epoch, last_candle_ist, stale_reason)."""
         if not candles:
@@ -555,7 +596,10 @@ class AngelService:
         last_dt = datetime.fromtimestamp(last_epoch, tz=IST)
         last_ist = last_dt.strftime("%Y-%m-%d %H:%M IST")
         now_dt = datetime.now(tz=IST)
-        age_sec = max(0.0, now_dt.timestamp() - last_epoch)
+        age_sec = now_dt.timestamp() - last_epoch
+        if age_sec < -2:
+            return False, last_epoch, last_ist, "Future candle timestamp."
+
 
         # If market is currently open (Mon-Fri 09:20..15:30 IST), intraday candles should be recent
         in_session = (
@@ -563,6 +607,9 @@ class AngelService:
             and (now_dt.hour, now_dt.minute) >= (9, 20)
             and (now_dt.hour, now_dt.minute) <= (15, 30)
         )
+        if exchange == "MCX":
+            bounds = configured_mcx_bounds(now_dt)
+            in_session = bool(bounds and bounds[0] <= now_dt.time() < bounds[1])
         if in_session and angel_interval != "ONE_DAY":
             max_live_age = 1800.0 if angel_interval in ("ONE_MINUTE", "THREE_MINUTE", "FIVE_MINUTE") else 3600.0
             if age_sec > max_live_age:
@@ -580,8 +627,12 @@ class AngelService:
         contract: Optional[Contract] = None,
     ) -> dict[str, Any]:
         """Fetch historical candles with rate-limiting, deduplication, retries, and freshness metadata."""
-        sym_norm = normalize_index_symbol(symbol)
-        spec = dict(INDEX_CONFIG.get(sym_norm, INDEX_CONFIG["NIFTY"]))
+        if contract is not None and contract.exchange == "MCX":
+            sym_norm = "CRUDEOIL"
+            spec = {"exchange": "MCX", "token": contract.token}
+        else:
+            sym_norm = normalize_index_symbol(symbol)
+            spec = dict(INDEX_CONFIG.get(sym_norm, INDEX_CONFIG["NIFTY"]))
         if contract is not None:
             spec["exchange"] = contract.exchange
             spec["token"] = contract.token
@@ -594,22 +645,22 @@ class AngelService:
         if cache_key in self._candle_cache:
             c_time, c_candles = self._candle_cache[cache_key]
             age = max(0.0, now - c_time)
-            if age < ttl and c_candles:
-                _, _, last_ist, _ = self._assess_candle_freshness(c_candles, angel_interval)
+            if age < ttl and c_candles and cache_key in self._last_valid_candles:
+                fresh, _, last_ist, reason = self._assess_candle_freshness(c_candles, angel_interval, spec["exchange"])
                 return {
                     "candles": [c.copy() for c in c_candles],
-                    "source": "cached",
+                    "source": ("cached" if fresh else "stale") if self.is_configured() else "simulated",
                     "last_candle_ist": last_ist,
                     "cached_age_seconds": round(age, 1),
-                    "error": None,
-                    "error_code": None,
-                    "reason": None,
+                    "error": reason,
+                    "error_code": None if fresh else "STALE_CANDLES",
+                    "reason": reason,
                 }
 
         self._ensure_loop()
         inflight = self._candle_inflight.get(cache_key)
         if inflight is not None and not inflight.done():
-            res = await inflight
+            res = await asyncio.shield(inflight)
             return {**res, "candles": [c.copy() for c in res.get("candles", [])]}
 
         task = asyncio.create_task(
@@ -624,11 +675,17 @@ class AngelService:
             )
         )
         self._candle_inflight[cache_key] = task
+        def cleanup(done):
+            if self._candle_inflight.get(cache_key) is done:
+                self._candle_inflight.pop(cache_key, None)
+            if not done.cancelled():
+                done.exception()  # retrieve any exception even if original waiter disconnected
+        task.add_done_callback(cleanup)
         try:
-            res = await task
+            res = await asyncio.shield(task)
             return {**res, "candles": [c.copy() for c in res.get("candles", [])]}
         finally:
-            if self._candle_inflight.get(cache_key) is task:
+            if task.done() and self._candle_inflight.get(cache_key) is task:
                 self._candle_inflight.pop(cache_key, None)
 
     async def _fetch_candles_singleflight(
@@ -648,7 +705,7 @@ class AngelService:
             if cache_key in self._last_valid_candles:
                 c_time, prev_candles = self._last_valid_candles[cache_key]
                 if prev_candles:
-                    _, _, last_ist, _ = self._assess_candle_freshness(prev_candles, angel_interval)
+                    _, _, last_ist, _ = self._assess_candle_freshness(prev_candles, angel_interval, spec["exchange"])
                     return {
                         "candles": [c.copy() for c in prev_candles],
                         "source": "stale",
@@ -669,11 +726,10 @@ class AngelService:
             }
 
         if not self.is_configured():
-            if contract is not None:
-                return _stale_or_unavailable("Angel One credentials are not configured for option candles.")
+            if contract is not None or not settings.ALLOW_SIMULATED_TRADING:
+                return _stale_or_unavailable("Angel One credentials are not configured for historical candles.")
             fallback = self._generate_fallback_candles(sym_norm, interval=interval, count=80)
-            self._candle_cache[cache_key] = (time.time(), fallback)
-            _, _, last_ist, _ = self._assess_candle_freshness(fallback, angel_interval)
+            _, _, last_ist, _ = self._assess_candle_freshness(fallback, angel_interval, spec["exchange"])
             return {
                 "candles": fallback,
                 "source": "simulated",
@@ -711,8 +767,15 @@ class AngelService:
         if angel_interval == "ONE_DAY" and days < 30:
             days = 60
 
-        full_from_date = (now_dt - timedelta(days=days)).strftime("%Y-%m-%d 09:15")
-        to_date = min(now_dt, now_dt.replace(hour=15, minute=30)).strftime("%Y-%m-%d %H:%M")
+        if spec["exchange"] == "MCX":
+            start_t = settings.MCX_SESSION_OPEN
+            bounds = configured_mcx_bounds(now_dt)
+            end = datetime.combine(now_dt.date(), bounds[1], IST) if bounds else now_dt
+        else:
+            start_t = "09:15"
+            end = now_dt.replace(hour=15, minute=30)
+        full_from_date = (now_dt - timedelta(days=days)).strftime("%Y-%m-%d ") + start_t
+        to_date = min(now_dt, end).strftime("%Y-%m-%d %H:%M")
 
         # Incremental tail fetch when we already have validated candles >= 20
         prev_entry = self._last_valid_candles.get(cache_key)
@@ -832,7 +895,7 @@ class AngelService:
                 else:
                     candles = parsed
 
-                is_fresh, _, last_ist, stale_note = self._assess_candle_freshness(candles, angel_interval)
+                is_fresh, _, last_ist, stale_note = self._assess_candle_freshness(candles, angel_interval, spec["exchange"])
                 now_ts = time.time()
                 self._last_valid_candles[cache_key] = (now_ts, candles)
                 if is_fresh:
@@ -1116,32 +1179,12 @@ class AngelService:
         except ValueError:
             return None
 
-    def _is_quote_valid_and_fresh(
-        self, token: str, item: Optional[dict[str, Any]], max_age_seconds: float = 15.0
-    ) -> tuple[bool, Optional[datetime], Optional[float]]:
-        """Validate finite positive LTP, local cache age, and exchange timestamp when present."""
+    def _is_quote_valid_and_fresh(self, token: str, item: Optional[dict[str, Any]], max_age_seconds: float = 15.0):
         if not item:
             return False, None, None
-        try:
-            ltp = float(item.get("ltp") or 0)
-        except (TypeError, ValueError):
-            return False, None, None
-        if not math.isfinite(ltp) or ltp <= 0:
-            return False, None, None
-        hit = self._tok_cache.get(token)
-        age_sec: Optional[float] = round(max(0.0, time.time() - hit[0]), 2) if hit else None
-        if age_sec is not None and age_sec > max_age_seconds:
-            return False, None, age_sec
-        exch_dt = self._parse_exchange_quote_time(item)
-        if exch_dt is not None:
-            now_ist = datetime.now(tz=IST)
-            from config import is_trading_day
-            # Only reject stale exchange timestamps when exchange session is currently active (09:16-15:30 IST).
-            if is_trading_day(now_ist) and (9, 16) <= (now_ist.hour, now_ist.minute) < (15, 30):
-                exch_age = (now_ist - exch_dt).total_seconds()
-                if exch_age > max(60.0, max_age_seconds * 4.0) or exch_age < -60.0:
-                    return False, exch_dt, age_sec
-        return True, exch_dt, age_sec
+        dt = self._parse_exchange_quote_time(item)
+        age = (datetime.now(tz=IST)-dt).total_seconds() if dt else None
+        return self._quote_is_current(item, min(max_age_seconds, settings.BROKER_QUOTE_MAX_AGE_SECONDS)), dt, age
 
     async def get_option_ltps(self, legs: list[dict[str, Any]]) -> dict[str, float]:
         """Live LTP for open positions/orders. Returns {leg['symbol']: ltp}; unresolved legs are omitted."""
@@ -1393,6 +1436,8 @@ class AngelService:
                 data_source = "live"
                 atm_strike = next((r["strike"] for r in chain_rows if r["is_atm"]), atm_strike)
 
+        if not chain_rows and not replaying and (self.is_configured() or not settings.ALLOW_SIMULATED_TRADING):
+            raise ValueError(f"Fresh option chain unavailable for {sym_norm}.")
         if not chain_rows:
             exp_suffix = selected_expiry["date"].replace("-", "")[2:] if selected_expiry else "261120"
             chain_rows = self._simulated_rows(

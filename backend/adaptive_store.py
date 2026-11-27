@@ -3,7 +3,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, func, or_
 from adaptive_memory import IST, build_memory, execution_rejection, object_json, trend_rejection
 from config import settings
-from database import (DailyReportModel, PaperTradeModel, DebateRecordModel,
+from quant_engine import calibration_summary
+from database import (AppKVModel, DailyReportModel, PaperTradeModel, DebateRecordModel,
                       AITradeEvidenceModel, async_session_factory)
 
 
@@ -34,9 +35,17 @@ async def retrieve_memory(user_id, snapshot, now=None):
             if evidence and evidence.user_id == user_id:
                 t['entry_snapshot'] = object_json(evidence.snapshot)
                 t['judge_confidence'] = evidence.confidence
+                t['verified_quant'] = bool(evidence.auto_executed and t['entry_snapshot'].get('quant_version') == 'quant-v1')
             trades.append(t)
+    from adaptive_memory import parse_time, summarize_trades
+    eligible = [t for t in trades if t.get('verified_quant') and t.get('exit_reason') not in ('WALLET_RESET','REPLAY_STOPPED') and (end := parse_time(t.get('closed_at'))) and end <= now]
+    days = sorted({parse_time(t['closed_at']).date() for t in eligible if parse_time(t['closed_at']).date()<now.date()}, reverse=True)[:settings.MEMORY_EXTENDED_DAYS]
+    extended = [t for t in eligible if parse_time(t['closed_at']).date() in days]
+    calibration = calibration_summary([dict(verified=True, confidence=t.get('judge_confidence'), net_pnl=t.get('realized_pnl')) for t in extended])
     return build_memory(report_data, trades, snapshot, now, settings.MEMORY_SHORT_DAYS,
-                        settings.MEMORY_LONG_DAYS, settings.AUTO_TREND_THRESHOLD_PCT)
+                        settings.MEMORY_LONG_DAYS, settings.AUTO_TREND_THRESHOLD_PCT) + (
+        '\nExtended verified quantitative-fill memory (up to 90 observed prior trading dates; bounded database sample): '
+        + summarize_trades(extended) + '\nObserved confidence bands (not predicted probabilities): ' + str(calibration))
 
 
 async def guard_auto_fill(db, user_id, order, now=None):
@@ -73,7 +82,50 @@ async def guard_auto_fill(db, user_id, order, now=None):
             DebateRecordModel.user_id == user_id, PaperTradeModel.user_id == user_id,
             DebateRecordModel.executed == 1, func.substr(PaperTradeModel.created_at, 1, 10).between(first_date, last_date)))).scalars().all()
         auto_ids.update(r.position_id for r in legacy if object_json(r.payload).get('auto_executed') is True)
-    rejection = execution_rejection([r.to_dict() for r in rows], auto_ids, now,
-        order['underlying'], order['strike'], order['option_type'], settings.AUTO_MAX_DAILY_TRADES,
-        settings.AUTO_REPEAT_STRIKE_COOLDOWN_MINUTES)
-    return rejection or ('A position in this index is already open.' if existing is not None else None)
+    from shadow_engine import DEFAULT_RISK_CONFIG
+    risk_row = await db.get(AppKVModel, f'risk-config:{user_id}')
+    user_risk = object_json(risk_row.value) if risk_row else {}
+    risk_cfg = {**DEFAULT_RISK_CONFIG, **user_risk}
+    max_trades = 0 if risk_cfg.get('no_count_limit') else int(
+        user_risk['max_daily_trades'] if 'max_daily_trades' in user_risk else settings.AUTO_MAX_DAILY_TRADES
+    )
+    strike_cd = int(
+        user_risk['repeat_strike_cooldown_minutes']
+        if 'repeat_strike_cooldown_minutes' in user_risk
+        else settings.AUTO_REPEAT_STRIKE_COOLDOWN_MINUTES
+    )
+
+    # execution_rejection uses <=0 cap? If max_trades == 0 (no_count_limit), pass large cap so count-limit is bypassed while strike cooldown stays active.
+    effective_cap = 999999 if max_trades <= 0 else max_trades
+    trade_dicts = [r.to_dict() for r in rows]
+    rejection = execution_rejection(trade_dicts, auto_ids, now,
+        order['underlying'], order['strike'], order['option_type'], effective_cap, strike_cd)
+    if rejection:
+        return rejection
+    if existing is not None:
+        return 'A position in this index is already open.'
+
+    # Dynamic risk-budget checks (daily loss limit, concurrent positions, consecutive loss cooldown)
+    today_iso = now.date().isoformat()
+    today_closed = [t for t in trade_dicts if t.get('status') == 'CLOSED' and str(t.get('closed_at') or t.get('exit_time') or '').startswith(today_iso)]
+    daily_pnl = sum(float(t.get('realized_pnl') or 0) for t in today_closed)
+    max_daily_loss = float(risk_cfg.get('max_daily_loss_inr', 0) or 0)
+    if max_daily_loss > 0 and daily_pnl <= -max_daily_loss:
+        return f'Daily loss limit reached (₹{abs(daily_pnl):.2f} >= ₹{max_daily_loss:.2f}).'
+
+    active_count = (await db.execute(select(func.count(PaperTradeModel.id)).where(
+        PaperTradeModel.user_id == user_id, PaperTradeModel.status == 'ACTIVE'))).scalar_one() or 0
+    max_conc = int(risk_cfg.get('max_concurrent_positions', 0) or 0)
+    if max_conc > 0 and active_count >= max_conc:
+        return f'Max concurrent positions ({max_conc}) reached.'
+
+    streak_limit = int(risk_cfg.get('max_consecutive_losses', 0) or 0)
+    streak_cd = int(risk_cfg.get('loss_streak_cooldown_minutes', 45) or 0)
+    if streak_limit > 0 and streak_cd > 0 and len(today_closed) >= streak_limit:
+        ordered = sorted(today_closed, key=lambda t: str(t.get('closed_at') or t.get('exit_time') or ''))
+        recent = ordered[-streak_limit:]
+        if all(float(t.get('realized_pnl') or 0) < 0 for t in recent):
+            last_closed = parse_time(recent[-1].get('closed_at') or recent[-1].get('exit_time'))
+            if last_closed and (now - last_closed).total_seconds() < streak_cd * 60:
+                return f'Consecutive stop-loss cooldown active ({streak_limit} losses; wait {streak_cd}m).'
+    return None
