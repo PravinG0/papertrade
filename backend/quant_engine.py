@@ -62,9 +62,25 @@ def validated_bars(rows, now, frame, bounds, minimum=50):
             break
         tail.append(actual[k])
     tail.reverse()
-    if len(tail) < minimum:
-        raise ValueError(f'{frame}: only {len(tail)} consecutive completed candles; minimum {minimum} required (stale, gaps or insufficient warm-up).')
-    return tail
+    if len(tail) >= minimum:
+        return tail
+
+    # Allow isolated prior-day broker gaps / unlisted past holidays ONLY when the recent
+    # live tail is strictly contiguous (all of today's session or >=12 bars intraday, >=5 for 1d)
+    # and >=85% of expected history is intact with at least `minimum` valid bars.
+    min_contiguous = 5 if frame == '1d' else 12
+    today = now.astimezone(IST).date()
+    today_expected_count = sum(
+        1 for k in expected
+        if (k == today if frame == '1d' else datetime.fromtimestamp(k, IST).date() == today)
+    )
+    required_contiguous = max(min_contiguous, today_expected_count)
+    if len(tail) >= min(len(expected), required_contiguous):
+        clean = [actual[k] for k in expected if k in actual and k not in duplicates]
+        if len(clean) >= minimum and len(clean) >= int(0.85 * len(expected)):
+            return clean
+
+    raise ValueError(f'{frame}: only {len(tail)} consecutive completed candles; minimum {minimum} required (stale, gaps or insufficient warm-up).')
 
 
 def ema(values, n):
