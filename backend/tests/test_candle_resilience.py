@@ -242,9 +242,9 @@ async def test_concurrent_identical_requests_deduplicated():
 @pytest.mark.asyncio
 async def test_cache_expiration_and_incremental_merge():
     svc = _configured_service()
-    assert svc._candle_ttl("FIVE_MINUTE") == 45.0
-    assert svc._candle_ttl("FIFTEEN_MINUTE") == 120.0
-    assert svc._candle_ttl("ONE_DAY") == 300.0
+    assert svc._candle_ttl("FIVE_MINUTE") == 60.0
+    assert svc._candle_ttl("FIFTEEN_MINUTE") == 300.0
+    assert svc._candle_ttl("ONE_DAY") == 1800.0
 
     rows = _make_smartapi_rows(25, 25000.0)
     fake_client = SimpleNamespace(post=AsyncMock(return_value=_mock_response(200, {"status": True, "data": rows})))

@@ -81,7 +81,7 @@ class AngelService:
         # Historical candle rate-limiting, deduplication, and cooldown state
         self._candle_lock = asyncio.Lock()
         self._last_candle_ts: float = 0.0
-        self._candle_min_interval: float = 0.65
+        self._candle_min_interval: float = 1.2
         self._candle_cooldown_until: float = 0.0
         self._candle_inflight: dict[str, asyncio.Task] = {}
 
@@ -435,15 +435,15 @@ class AngelService:
     def _candle_ttl(angel_interval: str) -> float:
         """Interval-aware cache TTL (seconds) to avoid redundant SmartAPI historical calls."""
         return {
-            "ONE_MINUTE": 30.0,
-            "THREE_MINUTE": 35.0,
-            "FIVE_MINUTE": 45.0,
-            "TEN_MINUTE": 90.0,
-            "FIFTEEN_MINUTE": 120.0,
-            "THIRTY_MINUTE": 150.0,
-            "ONE_HOUR": 180.0,
-            "ONE_DAY": 300.0,
-        }.get(angel_interval, 45.0)
+            "ONE_MINUTE": 55.0,
+            "THREE_MINUTE": 60.0,
+            "FIVE_MINUTE": 60.0,
+            "TEN_MINUTE": 180.0,
+            "FIFTEEN_MINUTE": 300.0,
+            "THIRTY_MINUTE": 450.0,
+            "ONE_HOUR": 600.0,
+            "ONE_DAY": 1800.0,
+        }.get(angel_interval, 60.0)
 
     @staticmethod
     def _parse_retry_after(resp: httpx.Response, default_sec: float = 10.0) -> float:
@@ -768,8 +768,8 @@ class AngelService:
                     last_code = f"HTTP_{resp.status_code}"
                     last_reason = f"Angel One historical API rate-limited/rejected (HTTP {resp.status_code}); retry in {int(retry_after)}s."
                     logger.warning("Historical candles HTTP %s for %s (attempt %d/%d)", resp.status_code, sym_norm, attempt + 1, max_attempts)
-                    if resp.status_code == 403 and attempt == 0 and not has_retry_hdr:
-                        await asyncio.sleep(1.2 + random.uniform(0.05, 0.2))
+                    if resp.status_code == 403 and attempt < max_attempts - 1 and not has_retry_hdr:
+                        await asyncio.sleep((1.5 * (attempt + 1)) + random.uniform(0.1, 0.3))
                         continue
                     if attempt < max_attempts - 1 and retry_after <= 3.0:
                         await asyncio.sleep(retry_after + random.uniform(0.05, 0.25))
