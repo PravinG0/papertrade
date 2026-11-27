@@ -43,7 +43,7 @@ from paper_engine import paper_engine
 from replay_engine import replay_engine
 from scheduler import get_scheduler
 from scrip_master import scrip_master
-from mcx_market import configured_mcx_bounds, select_contracts, quote_view
+from mcx_market import configured_mcx_bounds, historical_mcx_bounds, select_contracts, quote_view
 from quant_engine import validated_bars, frame_features
 
 logger = logging.getLogger("tradelab_main")
@@ -210,9 +210,13 @@ async def lifespan(app: FastAPI):
     angel_service.stream.watch([(spec['exchange'], spec['token']) for spec in INDEX_CONFIG.values()] + [('NSE','99926017')], persistent=True)
     asyncio.create_task(angel_service.ensure_contracts())
     _mtm_task = asyncio.create_task(_periodic_mtm_loop())
+    from mcx_ai import monitor_loop, scheduler_loop
+    mcx_tasks = [asyncio.create_task(monitor_loop()), asyncio.create_task(scheduler_loop())]
     if getattr(settings, "ENABLE_KEEP_ALIVE", True):
         asyncio.create_task(keep_alive_manager.start())
     yield
+    for task in mcx_tasks: task.cancel()
+    await asyncio.gather(*mcx_tasks, return_exceptions=True)
     if _mtm_task and not _mtm_task.done():
         _mtm_task.cancel()
         await asyncio.gather(_mtm_task, return_exceptions=True)
@@ -501,7 +505,7 @@ async def get_mcx_market(
             "future": quote_view(selected_future,fq), "futures": [quote_view(c,None) for c in futures],
             "option_expiries":expiries, "selected_expiry":selected_expiry,
             "options":[quote_view(c,oq.get(c.token)) for c in wanted],
-            "warning":"Futures and option series shown independently. No verified option-to-future mapping or commodity settlement model; execution disabled."}
+            "warning":"Manual paper BUY only; automatic execution requires verified option-to-future mapping, commodity specifications and live safety tests."}
 
 
 @app.get("/api/mcx/candles")
@@ -525,69 +529,58 @@ async def get_mcx_candles(future: str = Query(..., max_length=64),
     reason = meta.get("reason")
     if meta.get("source") in ("live","cached"):
         try:
-            analysis = frame_features(validated_bars(meta["candles"], observed_at, interval, configured_mcx_bounds))
+            analysis = frame_features(validated_bars(meta["candles"], observed_at, interval, historical_mcx_bounds))
         except ValueError as exc:
             reason = str(exc)
     return {**meta, "contract":contract.symbol,"analysis":analysis,"analysis_reason":reason,"research_only":True}
 
 
 @app.post("/api/mcx/debate/run")
-async def run_mcx_debate_endpoint(
-    future: Optional[str] = Query(default=None, max_length=64),
-    current_user: UserModel = Depends(get_current_user),
-):
-    """Run MCX CRUDEOIL quantitative & AI analysis using actual MCX futures & option chain data."""
-    if not settings.MCX_RESEARCH_ENABLED:
-        raise HTTPException(404, "MCX research disabled")
-    if current_user is None:
-        raise HTTPException(401, "Sign in required")
-    from mcx_market import mcx_technical_summary
-    now = datetime.now(ZoneInfo("Asia/Kolkata"))
-    await angel_service.ensure_contracts()
-    _, fut, _, sel_exp, opts = select_contracts(scrip_master.mcx_contracts(), now.date(), future)
-    if not fut:
-        raise HTTPException(503, "MCX CRUDEOIL futures contract unavailable")
-    fq = (await angel_service.get_token_quotes([("MCX", fut.token)])).get(fut.token)
-    if not fq or not fq.get("ltp"):
-        raise HTTPException(503, "Live MCX futures quote unavailable")
-    meta = await angel_service.get_candles_with_meta("CRUDEOIL", "5m", "5d", contract=fut)
-    if meta.get("source") not in ("live", "cached"):
-        raise HTTPException(503, meta.get("reason") or "MCX historical candles unavailable")
-    ltp = float(fq["ltp"])
-    tech = mcx_technical_summary(meta["candles"], ltp)
-    if not tech.get("available"):
-        raise HTTPException(503, tech.get("reason") or "Insufficient MCX candles")
-    # Pick ATM CE/PE from selected option expiry
-    atm_strike = min({o.strike for o in opts}, key=lambda k: abs(k - ltp)) if opts else None
-    verdict = "BUY CE" if tech["trend"] == "BULLISH" else ("BUY PE" if tech["trend"] == "BEARISH" else "NO_TRADE")
-    return {
-        "market": "MCX",
-        "instrument": "CRUDEOIL",
-        "future": fut.symbol,
-        "expiry": sel_exp,
-        "spot_price": ltp,
-        "technical": tech,
-        "recommended_strike": atm_strike,
-        "verdict": verdict,
-        "external_macro": "UNAVAILABLE",
-        "auto_execution_enabled": False,
-        "timestamp": now.isoformat(),
-    }
+async def run_mcx_debate_endpoint(future: Optional[str] = Query(default=None,max_length=64),
+    expiry: Optional[str] = Query(default=None,max_length=10), current_user: UserModel = Depends(get_current_user)):
+    if current_user is None: raise HTTPException(401, "Sign in required")
+    if not settings.MCX_RESEARCH_ENABLED: raise HTTPException(404,"MCX disabled")
+    from mcx_ai import run
+    try: return await run(current_user.id,future=future,expiry=expiry)
+    except ValueError as exc: raise HTTPException(503,str(exc))
+
+
+@app.get("/api/mcx/debate/status")
+async def mcx_status_endpoint(current_user: UserModel = Depends(get_current_user)):
+    if current_user is None: raise HTTPException(401,"Sign in required")
+    from mcx_ai import status
+    return await status(current_user.id)
+
+
+@app.post("/api/mcx/debate/config")
+async def mcx_config_endpoint(payload: dict[str,Any],current_user: UserModel = Depends(get_current_user)):
+    if current_user is None: raise HTTPException(401,"Sign in required")
+    from mcx_ai import configure
+    try: return await configure(current_user.id,payload)
+    except ValueError as exc: raise HTTPException(400,str(exc))
+
+
+@app.get("/api/mcx/debate/history")
+async def mcx_history_endpoint(limit: int = Query(30,ge=1,le=100),offset: int = Query(0,ge=0), current_user: UserModel = Depends(get_current_user)):
+    if current_user is None: raise HTTPException(401,"Sign in required")
+    from mcx_ai import history
+    return await history(current_user.id,limit,offset)
+
+
+@app.get("/api/mcx/research/summary")
+async def mcx_research_endpoint(current_user: UserModel = Depends(get_current_user)):
+    if current_user is None: raise HTTPException(401,"Sign in required")
+    from mcx_market import get_mcx_paper_state
+    return {ledger:await get_mcx_paper_state(current_user.id,ledger=ledger) for ledger in ('champion','challenger')}
 
 
 @app.get("/api/mcx/paper/state")
 async def get_mcx_paper_endpoint(current_user: Optional[UserModel] = Depends(get_current_user)):
-    if current_user is None:
-        raise HTTPException(401, "Sign in required")
-    from mcx_market import get_mcx_paper_state, settle_mcx_positions
-    state = await get_mcx_paper_state(current_user.id)
-    tokens = [("MCX", str(p["token"])) for p in state.get("positions", []) if p.get("token")]
-    if tokens:
-        quotes = await angel_service.get_token_quotes(tokens)
-        ltps = {tok: float(q["ltp"]) for tok, q in quotes.items() if q and q.get("ltp")}
-        if ltps:
-            await settle_mcx_positions(current_user.id, ltps)
-            state = await get_mcx_paper_state(current_user.id)
+    if current_user is None: raise HTTPException(401,"Sign in required")
+    from mcx_market import get_mcx_paper_state
+    state=await get_mcx_paper_state(current_user.id)
+    from mcx_ai import daily_summaries
+    state["daily_reports"]=daily_summaries(state["trades"])
     return state
 
 
@@ -613,13 +606,15 @@ async def place_mcx_paper_endpoint(
         raise HTTPException(503, f"Live MCX quote unavailable for {sym}; order not placed.")
     depth = q.get("depth") or {}
     ask = ((depth.get("sell") or [{}])[0]).get("price")
-    entry = float(ask or q["ltp"])
-    lots = int(payload.get("lots") or 1)
-    sl = float(payload.get("stop_loss") or round(entry * 0.85, 1))
-    tgt = float(payload.get("target") or round(entry * 1.25, 1))
+    if not ask or not angel_service._quote_is_current(q,settings.BROKER_QUOTE_MAX_AGE_SECONDS):
+        raise HTTPException(503,"Fresh MCX ask price required")
     try:
-        return await place_mcx_paper_order(current_user.id, contract, lots, entry, sl, tgt, now)
-    except ValueError as exc:
+        entry = float(ask)
+        lots = payload.get("lots",1)
+        sl = float(payload.get("stop_loss",round(entry * 0.85, 1)))
+        tgt = float(payload.get("target",round(entry * 1.25, 1)))
+        return await place_mcx_paper_order(current_user.id, contract, lots, entry, sl, tgt, datetime.now(ZoneInfo("Asia/Kolkata")))
+    except (ValueError,TypeError) as exc:
         raise HTTPException(400, str(exc))
 
 
@@ -633,8 +628,18 @@ async def squareoff_mcx_endpoint(current_user: Optional[UserModel] = Depends(get
     if not tokens:
         return {"settled": 0}
     quotes = await angel_service.get_token_quotes(tokens)
-    ltps = {tok: float(q["ltp"]) for tok, q in quotes.items() if q and q.get("ltp")}
-    return await settle_mcx_positions(current_user.id, ltps, force_squareoff=True)
+    from adaptive_memory import number, parse_time
+    bids = {}
+    ids = set()
+    for p in state['positions']:
+        q=quotes.get(str(p['token']))
+        if q and angel_service._quote_is_current(q,settings.BROKER_QUOTE_MAX_AGE_SECONDS):
+            bid=number(((q.get('depth') or {}).get('buy') or [{}])[0].get('price'))
+            stamp=angel_service._parse_exchange_quote_time(q); entered=parse_time(p.get('entered_at'))
+            if bid and bid>0 and stamp and entered and stamp>=entered:
+                bids[str(p['token'])]=bid; ids.add(p['id'])
+    if not bids: raise HTTPException(503,"No fresh executable MCX bid; positions remain open")
+    return await settle_mcx_positions(current_user.id,bids,force_squareoff=True,eligible_ids=ids)
 
 
 @app.get("/api/shadow/summary")

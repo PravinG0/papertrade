@@ -1,11 +1,9 @@
-# TradeLab V5 Hybrid — Data Preservation Report
+# TradeLab Cloud V6.1 — Data Preservation Report
 
-**Date:** 26 November 2026
+**Date:** 27 November 2026
 
-## Verification of Production Data Safety
-
-1. **Zero Destructive Operations:** No `DROP TABLE`, `TRUNCATE`, `DELETE`, wallet reset, or historical trade mutation was introduced or executed.
-2. **Schema Compatibility:** All V5 metadata (`timeframes`, `market_regime`, `quantitative_validation`, `execution_validation`, `original_judge_verdict`, `quant_version`) is stored inside existing JSON payload columns (`debate_records.payload` and `ai_trade_evidence.snapshot`). No database migration is required for V5.
-3. **Legacy Record Isolation:** Pre-V5 `debate_records` and `paper_trades` deserialize cleanly with safe defaults and are **never** mislabeled as `verified_quant`.
-4. **Research Isolation:** `research_backtest.py` and `research_ml.py` operate strictly offline on operator-supplied JSON files with isolated simulated wallets and never touch Supabase production tables.
-5. **Credentials:** `.env` and Render/Vercel environment variables were not modified or committed.
+## Production Data Safety Verification
+1. **Zero Destructive SQL or Migrations:** Zero `DROP`, `TRUNCATE`, `DELETE`, or schema migrations were added or run.
+2. **Existing `app_kv` Keys Retained:** `mcx-paper:<uid>` is preserved; V6.1 adds separate `mcx-champion:<uid>`, `mcx-challenger:<uid>`, `ai_config`, and `debates` keys using transactional advisory locks (`mcx_storage.py`).
+3. **Existing `pravin_g` (`user_id=1`, `portfolio_id=10`) Account:** Reconciled cash `₹9,91,609.77`, `90` closed `paper_trades`, all AI debates, daily reports, and adaptive learning memory remain 100% intact.
+4. **Isolated Test Execution:** All `pytest` runs (`conftest.py`) and live `22:52 IST` MCX Gemini debate tests used isolated temporary SQLite databases.

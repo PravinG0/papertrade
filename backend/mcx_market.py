@@ -1,8 +1,9 @@
-"""Read-only MCX Crude Oil research. No index-order or wallet integration.
+"""MCX Crude Oil research and isolated long-option paper ledger.
 Exchange calendar must be operator verified. Never infer the option's underlying
 future from nearest expiry; show exact future and option series independently.
 """
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
+import math
 from zoneinfo import ZoneInfo
 from dataclasses import dataclass, asdict
 from decimal import Decimal, InvalidOperation
@@ -33,6 +34,25 @@ def configured_mcx_bounds(now):
     return mcx_session_bounds(now, opening=settings.MCX_SESSION_OPEN, closing=settings.MCX_SESSION_CLOSE,
         valid_until=settings.MCX_SESSION_VALID_UNTIL, valid_from=settings.MCX_SESSION_VALID_FROM,
         holidays=settings.MCX_HOLIDAYS, special_sessions=settings.MCX_SPECIAL_SESSIONS)
+
+
+def historical_mcx_bounds(day):
+    """Operator-verified historical session ranges, only for indicator warm-up."""
+    from config import settings
+    current = configured_mcx_bounds(day)
+    if current:
+        return current
+    if date.fromisoformat(settings.MCX_SESSION_VALID_FROM) <= day:
+        return None
+    for item in settings.MCX_HISTORICAL_SESSIONS.split(','):
+        if not item.strip():
+            continue
+        start, end, opening, closing = item.strip().split('/')
+        if date.fromisoformat(start) <= day <= date.fromisoformat(end):
+            return mcx_session_bounds(day, opening=opening, closing=closing,
+                valid_from=start, valid_until=end, holidays=settings.MCX_HOLIDAYS,
+                special_sessions=settings.MCX_SPECIAL_SESSIONS)
+    return None
 
 
 @dataclass(frozen=True)
@@ -175,13 +195,11 @@ def _empty_mcx_ledger() -> dict:
     return {"initial_capital": 1000000.0, "cash_balance": 1000000.0, "positions": [], "trades": []}
 
 
-async def get_mcx_paper_state(user_id: int) -> dict:
-    import json
-    from database import AppKVModel, async_session_factory
-    async with async_session_factory() as db:
-        row = await db.get(AppKVModel, f"mcx-paper:{user_id}")
-        data = json.loads(row.value) if (row and row.value) else _empty_mcx_ledger()
-    positions = data.get("positions", [])
+async def get_mcx_paper_state(user_id: int, *, ledger="paper") -> dict:
+    from mcx_storage import read
+    data = await read(ledger_key(user_id, ledger), _empty_mcx_ledger)
+    now = datetime.now(IST)
+    positions = [{**p, 'exit_due':position_due(p,now)} for p in data.get("positions", [])]
     trades = data.get("trades", [])
     realized = round(sum(float(t.get("net_pnl") or 0) for t in trades), 2)
     unrealized = round(sum(float(p.get("unrealized_pnl") or 0) for p in positions), 2)
@@ -193,7 +211,7 @@ async def get_mcx_paper_state(user_id: int) -> dict:
         "realized_pnl": realized,
         "unrealized_pnl": unrealized,
         "positions": positions,
-        "trades": trades[:50],
+        "trades": trades,
     }
 
 
@@ -205,27 +223,33 @@ async def place_mcx_paper_order(
     stop_loss: float,
     target: float,
     now: datetime,
+    *, ledger="paper", debate_id=None, guard=None,
 ) -> dict:
     """Execute an isolated MCX CRUDEOIL option BUY CE/PE paper trade."""
-    import json, uuid
-    from database import AppKVModel, async_session_factory
+    import uuid
+    from mcx_storage import edit
     if contract.option_type not in ("CE", "PE"):
         raise ValueError("Only MCX CRUDEOIL BUY CE / BUY PE option orders are supported.")
-    if contract.expiry < now.astimezone(IST).date().isoformat():
-        raise ValueError("Selected MCX option contract has expired.")
+    if contract.expiry <= now.astimezone(IST).date().isoformat():
+        raise ValueError("MCX expiry-day or expired contract entries are disabled.")
     bounds = configured_mcx_bounds(now)
     if not bounds or not (bounds[0] <= now.astimezone(IST).time() < bounds[1]):
         raise ValueError("MCX Crude Oil market session is closed.")
-    if lots <= 0 or lots > 20:
+    if type(lots) is not int or lots <= 0 or lots > 20:
         raise ValueError("Lots must be between 1 and 20.")
     qty = lots * int(contract.lot_size)
-    if entry_price <= 0 or not (0 < stop_loss < entry_price < target):
+    if not all(math.isfinite(float(v)) for v in (entry_price, stop_loss, target)) or not (0 < stop_loss < entry_price < target):
         raise ValueError("Invalid MCX option SL/target geometry (require 0 < stop_loss < entry < target).")
-    cost = round(float(entry_price) * qty, 2)
+    entry_price, stop_loss, target = (round(float(v), 2) for v in (entry_price, stop_loss, target))
+    if not 0 < stop_loss < entry_price < target or qty <= 0:
+        raise ValueError("Invalid rounded price or quantity")
+    cost = round(entry_price * qty, 2)
 
-    async with async_session_factory() as db:
-        row = await db.get(AppKVModel, f"mcx-paper:{user_id}")
-        data = json.loads(row.value) if (row and row.value) else _empty_mcx_ledger()
+    async with edit(ledger_key(user_id, ledger), _empty_mcx_ledger) as data:
+        if debate_id and any(p.get('debate_id') == debate_id for p in data.get('positions', []) + data.get('trades', [])):
+            raise ValueError("MCX debate already executed in this wallet")
+        if guard:
+            guard(data)
         cash = float(data.get("cash_balance", 1000000.0))
         if cost > cash:
             raise ValueError(f"Insufficient MCX paper cash (need ₹{cost:.2f}, available ₹{cash:.2f}).")
@@ -248,42 +272,34 @@ async def place_mcx_paper_order(
             "unrealized_pnl": 0.0,
             "entered_at": now.astimezone(IST).isoformat(),
             "status": "OPEN",
+            "debate_id": debate_id,
+            "source": "AI" if debate_id else "MANUAL",
         }
         data["cash_balance"] = round(cash - cost, 2)
         data.setdefault("positions", []).insert(0, pos)
-        payload = json.dumps(data)
-        if row is None:
-            db.add(AppKVModel(key=f"mcx-paper:{user_id}", value=payload))
-        else:
-            row.value = payload
-        await db.commit()
     return {"status": "FILLED", "position": pos, "cash_balance": data["cash_balance"]}
 
 
-async def settle_mcx_positions(user_id: int, quotes_by_token: dict[str, float], *, force_squareoff: bool = False) -> dict:
+async def settle_mcx_positions(user_id: int, quotes_by_token: dict[str, float], *, force_squareoff: bool = False, ledger="paper", eligible_ids=None, now=None, due_only=False) -> dict:
     """Update MTM and settle SL/Target/Square-off on genuine MCX quotes only."""
-    import json
-    from database import AppKVModel, async_session_factory
-    now = datetime.now(IST)
+    from mcx_storage import edit
+    now = now or datetime.now(IST)
     settled = 0
-    async with async_session_factory() as db:
-        row = await db.get(AppKVModel, f"mcx-paper:{user_id}")
-        if not row or not row.value:
-            return {"settled": 0}
-        data = json.loads(row.value)
+    async with edit(ledger_key(user_id, ledger), _empty_mcx_ledger) as data:
         remaining = []
         for p in data.get("positions", []):
             ltp = quotes_by_token.get(str(p.get("token")))
-            if ltp is None or ltp <= 0:
+            if (eligible_ids is not None and p.get('id') not in eligible_ids) or ltp is None or not math.isfinite(ltp) or ltp <= 0:
                 remaining.append(p)
                 continue
             p["ltp"] = round(float(ltp), 2)
+            p["last_monitored_at"] = now.isoformat()
             qty = int(p["quantity"])
             buy_val = float(p["entry_price"]) * qty
             sell_val = float(ltp) * qty
             p["unrealized_pnl"] = round(sell_val - buy_val, 2)
             reason = None
-            if force_squareoff:
+            if force_squareoff or (due_only and position_due(p, now)):
                 reason = "MCX_SESSION_SQUAREOFF"
             elif ltp <= float(p["stop_loss"]):
                 reason = "STOP_LOSS_HIT"
@@ -296,11 +312,25 @@ async def settle_mcx_positions(user_id: int, quotes_by_token: dict[str, float], 
                 closed = {**p, "status": "CLOSED", "exit_price": round(float(ltp), 2), "exit_reason": reason,
                           "charges": chg, "net_pnl": net, "closed_at": now.isoformat()}
                 data.setdefault("trades", []).insert(0, closed)
-                data["trades"] = data["trades"][:100]
                 settled += 1
             else:
                 remaining.append(p)
         data["positions"] = remaining
-        row.value = json.dumps(data)
-        await db.commit()
     return {"settled": settled, "cash_balance": data["cash_balance"]}
+
+
+def ledger_key(user_id, ledger):
+    if ledger not in ('paper', 'champion', 'challenger'):
+        raise ValueError('Invalid MCX ledger')
+    return f'mcx-{ledger}:{int(user_id)}'
+
+
+def position_due(position, now, bounds_fn=configured_mcx_bounds):
+    """Square off two minutes before close, or recover on a later session."""
+    from adaptive_memory import parse_time
+    entered = parse_time(position.get('entered_at'))
+    if not entered:
+        return False
+    bounds = bounds_fn(now)
+    return bool(entered.date() < now.astimezone(IST).date() or (bounds and
+        now >= datetime.combine(now.astimezone(IST).date(), bounds[1], IST) - timedelta(minutes=2)))

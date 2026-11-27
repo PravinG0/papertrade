@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     BROKER_QUOTE_MAX_AGE_SECONDS: float = Field(default=10.0, gt=0, le=30)
     V6_AUTO_EXECUTION_ENABLED: bool = Field(default=False)
     MCX_RESEARCH_ENABLED: bool = Field(default=True)
+    MCX_AUTO_EXECUTION_ENABLED: bool = Field(default=False)
+    MCX_SHADOW_ENABLED: bool = Field(default=False)
+    MCX_SPECIFICATIONS_VERIFIED: bool = Field(default=False)
+    MCX_CALENDAR_VERIFIED: bool = Field(default=False)
+    MCX_HISTORICAL_SESSIONS: str = Field(default="")
+    MCX_OPTION_FUTURE_MAP: str = Field(default="{}")
+    MCX_MAX_RISK_PCT: float = Field(default=0.25, gt=0, le=1)
+    MCX_MAX_DAILY_LOSS_PCT: float = Field(default=1.0, gt=0, le=5)
+
     # Confirm this date and exchange session before enabling any MCX execution.
     MCX_SESSION_OPEN: str = Field(default="09:00")
     MCX_SESSION_CLOSE: str = Field(default="23:55")
