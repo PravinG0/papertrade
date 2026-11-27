@@ -72,10 +72,18 @@ class AngelService:
 
         # In-memory caches
         self._candle_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        self._last_valid_candles: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._quote_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._spot_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._scrip_master: dict[str, Any] = {}
         self._scrip_download_task: Optional[asyncio.Task] = None
+
+        # Historical candle rate-limiting, deduplication, and cooldown state
+        self._candle_lock = asyncio.Lock()
+        self._last_candle_ts: float = 0.0
+        self._candle_min_interval: float = 1.2
+        self._candle_cooldown_until: float = 0.0
+        self._candle_inflight: dict[str, asyncio.Task] = {}
 
         # Live-quote plumbing (SmartAPI allows ~1 quote request / second)
         self._quote_lock = asyncio.Lock()
@@ -112,6 +120,8 @@ class AngelService:
         if self._loop != loop:
             self._loop = loop
             self._auth_lock = asyncio.Lock()
+            self._candle_lock = asyncio.Lock()
+            self._candle_inflight = {}
             if self._client is not None and not self._client.is_closed:
                 self._client = None
 
@@ -153,7 +163,7 @@ class AngelService:
             if not force_refresh and self._jwt_token and now < self._token_expiry_epoch:
                 return True
 
-            if now - self._last_auth_attempt < self._auth_cooldown:
+            if not force_refresh and now - self._last_auth_attempt < self._auth_cooldown:
                 logger.debug("Authentication cooldown active, skipping attempt.")
                 return bool(self._jwt_token and now < self._token_expiry_epoch)
 
@@ -420,6 +430,447 @@ class AngelService:
 
     # ── Historical Candles ───────────────────────────────────────────────────
 
+    @staticmethod
+    def _candle_ttl(angel_interval: str) -> float:
+        """Interval-aware cache TTL (seconds) to avoid redundant SmartAPI historical calls."""
+        return {
+            "ONE_MINUTE": 55.0,
+            "THREE_MINUTE": 60.0,
+            "FIVE_MINUTE": 60.0,
+            "TEN_MINUTE": 180.0,
+            "FIFTEEN_MINUTE": 300.0,
+            "THIRTY_MINUTE": 450.0,
+            "ONE_HOUR": 600.0,
+            "ONE_DAY": 1800.0,
+        }.get(angel_interval, 60.0)
+
+    @staticmethod
+    def _parse_retry_after(resp: httpx.Response, default_sec: float = 10.0) -> float:
+        """Parse Retry-After header safely, bounded between 1s and 60s."""
+        raw = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+        if raw:
+            try:
+                val = float(str(raw).strip())
+                return max(1.0, min(60.0, val))
+            except ValueError:
+                pass
+        return default_sec
+
+    @staticmethod
+    def _parse_and_validate_candles(
+        raw: Any,
+        one_day: bool = False,
+        angel_interval: str = "FIVE_MINUTE",
+    ) -> list[dict[str, Any]]:
+        """Validate timestamps, OHLC bounds, finite values, and monotonic ordering."""
+        if not isinstance(raw, list):
+            return []
+        parsed: list[dict[str, Any]] = []
+        for row in raw:
+            if not isinstance(row, (list, tuple)) or len(row) < 5:
+                continue
+            ts_str, o, h, l, c = row[0], row[1], row[2], row[3], row[4]
+            vol = row[5] if len(row) > 5 else 0
+            try:
+                dt = datetime.fromisoformat(str(ts_str))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=IST)
+                t = int(dt.timestamp())
+                o_f, h_f, l_f, c_f, v_f = float(o), float(h), float(l), float(c), float(vol or 0)
+            except (ValueError, TypeError):
+                continue
+
+            if not (
+                math.isfinite(o_f)
+                and math.isfinite(h_f)
+                and math.isfinite(l_f)
+                and math.isfinite(c_f)
+                and math.isfinite(v_f)
+            ):
+                continue
+            if o_f <= 0 or h_f <= 0 or l_f <= 0 or c_f <= 0 or v_f < 0:
+                continue
+            if h_f < l_f:
+                continue
+
+            parsed.append({
+                "time": t,
+                "open": round(o_f, 2),
+                "high": round(max(h_f, o_f, c_f), 2),
+                "low": round(min(l_f, o_f, c_f), 2),
+                "close": round(c_f, 2),
+                "volume": int(v_f),
+            })
+
+        if not parsed:
+            return []
+
+        # Enforce strictly ascending unique timestamps
+        parsed.sort(key=lambda item: item["time"])
+        deduped: list[dict[str, Any]] = []
+        last_time = -1
+        for item in parsed:
+            if item["time"] > last_time:
+                deduped.append(item)
+                last_time = item["time"]
+
+        if deduped and one_day and angel_interval != "ONE_DAY":
+            last_day = datetime.fromtimestamp(deduped[-1]["time"], tz=IST).date()
+            deduped = [
+                c for c in deduped
+                if datetime.fromtimestamp(c["time"], tz=IST).date() == last_day
+            ]
+        return deduped
+
+    @staticmethod
+    def _merge_candles(
+        existing: list[dict[str, Any]],
+        incoming: list[dict[str, Any]],
+        one_day: bool = False,
+        angel_interval: str = "FIVE_MINUTE",
+    ) -> list[dict[str, Any]]:
+        """Merge incremental tail candles onto existing validated history without duplicates."""
+        by_time: dict[int, dict[str, Any]] = {int(c["time"]): c.copy() for c in existing if c.get("time") is not None}
+        for c in incoming:
+            if c.get("time") is not None:
+                by_time[int(c["time"])] = c.copy()
+        merged = [by_time[k] for k in sorted(by_time)]
+        if merged and one_day and angel_interval != "ONE_DAY":
+            last_day = datetime.fromtimestamp(merged[-1]["time"], tz=IST).date()
+            merged = [
+                c for c in merged
+                if datetime.fromtimestamp(c["time"], tz=IST).date() == last_day
+            ]
+        return merged[-500:] if len(merged) > 500 else merged
+
+    @staticmethod
+    def _assess_candle_freshness(
+        candles: list[dict[str, Any]],
+        angel_interval: str = "FIVE_MINUTE",
+    ) -> tuple[bool, Optional[int], Optional[str], Optional[str]]:
+        """Return (is_fresh, last_epoch, last_candle_ist, stale_reason)."""
+        if not candles:
+            return False, None, None, "No candles returned."
+        last_epoch = int(candles[-1]["time"])
+        last_dt = datetime.fromtimestamp(last_epoch, tz=IST)
+        last_ist = last_dt.strftime("%Y-%m-%d %H:%M IST")
+        now_dt = datetime.now(tz=IST)
+        age_sec = max(0.0, now_dt.timestamp() - last_epoch)
+
+        # If market is currently open (Mon-Fri 09:20..15:30 IST), intraday candles should be recent
+        in_session = (
+            now_dt.weekday() < 5
+            and (now_dt.hour, now_dt.minute) >= (9, 20)
+            and (now_dt.hour, now_dt.minute) <= (15, 30)
+        )
+        if in_session and angel_interval != "ONE_DAY":
+            max_live_age = 1800.0 if angel_interval in ("ONE_MINUTE", "THREE_MINUTE", "FIVE_MINUTE") else 3600.0
+            if age_sec > max_live_age:
+                return False, last_epoch, last_ist, f"Latest intraday candle is {int(age_sec // 60)}m old ({last_ist})."
+        elif age_sec > 5 * 86400:
+            return False, last_epoch, last_ist, f"Latest candle is stale ({last_ist})."
+
+        return True, last_epoch, last_ist, None
+
+    async def get_candles_with_meta(
+        self,
+        symbol: str = "NIFTY",
+        interval: str = "5m",
+        range_period: str = "5d",
+        contract: Optional[Contract] = None,
+    ) -> dict[str, Any]:
+        """Fetch historical candles with rate-limiting, deduplication, retries, and freshness metadata."""
+        sym_norm = normalize_index_symbol(symbol)
+        spec = dict(INDEX_CONFIG.get(sym_norm, INDEX_CONFIG["NIFTY"]))
+        if contract is not None:
+            spec["exchange"] = contract.exchange
+            spec["token"] = contract.token
+
+        angel_interval = INTERVAL_MAP.get(interval.lower(), INTERVAL_MAP.get(interval, "FIVE_MINUTE"))
+        cache_key = f"{spec['exchange']}_{spec['token']}_{angel_interval}_{range_period.lower()}"
+        ttl = self._candle_ttl(angel_interval)
+        now = time.time()
+
+        if cache_key in self._candle_cache:
+            c_time, c_candles = self._candle_cache[cache_key]
+            age = max(0.0, now - c_time)
+            if age < ttl and c_candles:
+                _, _, last_ist, _ = self._assess_candle_freshness(c_candles, angel_interval)
+                return {
+                    "candles": [c.copy() for c in c_candles],
+                    "source": "cached",
+                    "last_candle_ist": last_ist,
+                    "cached_age_seconds": round(age, 1),
+                    "error": None,
+                    "error_code": None,
+                    "reason": None,
+                }
+
+        self._ensure_loop()
+        inflight = self._candle_inflight.get(cache_key)
+        if inflight is not None and not inflight.done():
+            res = await inflight
+            return {**res, "candles": [c.copy() for c in res.get("candles", [])]}
+
+        task = asyncio.create_task(
+            self._fetch_candles_singleflight(
+                sym_norm=sym_norm,
+                spec=spec,
+                interval=interval,
+                angel_interval=angel_interval,
+                range_period=range_period,
+                cache_key=cache_key,
+                contract=contract,
+            )
+        )
+        self._candle_inflight[cache_key] = task
+        try:
+            res = await task
+            return {**res, "candles": [c.copy() for c in res.get("candles", [])]}
+        finally:
+            if self._candle_inflight.get(cache_key) is task:
+                self._candle_inflight.pop(cache_key, None)
+
+    async def _fetch_candles_singleflight(
+        self,
+        sym_norm: str,
+        spec: dict[str, Any],
+        interval: str,
+        angel_interval: str,
+        range_period: str,
+        cache_key: str,
+        contract: Optional[Contract],
+    ) -> dict[str, Any]:
+        """Singleflight worker for historical candles with rate limiting, retries, and stale fallback."""
+        one_day = range_period.lower() in ("1d", "today")
+
+        def _stale_or_unavailable(reason: str, error_code: Optional[str] = None) -> dict[str, Any]:
+            if cache_key in self._last_valid_candles:
+                c_time, prev_candles = self._last_valid_candles[cache_key]
+                if prev_candles:
+                    _, _, last_ist, _ = self._assess_candle_freshness(prev_candles, angel_interval)
+                    return {
+                        "candles": [c.copy() for c in prev_candles],
+                        "source": "stale",
+                        "last_candle_ist": last_ist,
+                        "cached_age_seconds": round(max(0.0, time.time() - c_time), 1),
+                        "error": reason,
+                        "error_code": error_code,
+                        "reason": reason,
+                    }
+            return {
+                "candles": [],
+                "source": "unavailable",
+                "last_candle_ist": None,
+                "cached_age_seconds": None,
+                "error": reason,
+                "error_code": error_code,
+                "reason": reason,
+            }
+
+        if not self.is_configured():
+            if contract is not None:
+                return _stale_or_unavailable("Angel One credentials are not configured for option candles.")
+            fallback = self._generate_fallback_candles(sym_norm, interval=interval, count=80)
+            self._candle_cache[cache_key] = (time.time(), fallback)
+            _, _, last_ist, _ = self._assess_candle_freshness(fallback, angel_interval)
+            return {
+                "candles": fallback,
+                "source": "simulated",
+                "last_candle_ist": last_ist,
+                "cached_age_seconds": 0.0,
+                "error": None,
+                "error_code": None,
+                "reason": None,
+            }
+
+        # Respect active broker rate-limit cooldown
+        cooldown_rem = self._candle_cooldown_until - time.time()
+        if cooldown_rem > 0:
+            return _stale_or_unavailable(
+                f"Angel One historical API cooldown active ({int(math.ceil(cooldown_rem))}s remaining).",
+                error_code="RATE_LIMIT_COOLDOWN",
+            )
+
+        if not await self.authenticate():
+            return _stale_or_unavailable("Angel One authentication failed; unable to fetch historical candles.", error_code="AUTH_FAILED")
+
+        now_dt = datetime.now(tz=IST)
+        days = 5
+        if one_day:
+            days = 5
+        elif range_period.lower() in ("5d",):
+            days = 5
+        elif range_period.lower() in ("10d", "15d"):
+            days = 15
+        elif range_period.lower() in ("1mo", "30d"):
+            days = 30
+        elif range_period.lower() in ("1y", "1year"):
+            days = 365
+
+        if angel_interval == "ONE_DAY" and days < 30:
+            days = 60
+
+        full_from_date = (now_dt - timedelta(days=days)).strftime("%Y-%m-%d 09:15")
+        to_date = min(now_dt, now_dt.replace(hour=15, minute=30)).strftime("%Y-%m-%d %H:%M")
+
+        # Incremental tail fetch when we already have validated candles >= 20
+        prev_entry = self._last_valid_candles.get(cache_key)
+        incremental_from: Optional[str] = None
+        if prev_entry and len(prev_entry[1]) >= 20 and angel_interval != "ONE_DAY" and not one_day:
+            last_candle_dt = datetime.fromtimestamp(prev_entry[1][-1]["time"], tz=IST)
+            overlap_dt = last_candle_dt - timedelta(hours=2)
+            if overlap_dt < now_dt:
+                incremental_from = overlap_dt.strftime("%Y-%m-%d %H:%M")
+
+        from_date = incremental_from or full_from_date
+        last_reason = f"Historical candle data for {sym_norm} is unavailable."
+        last_code: Optional[str] = None
+        max_attempts = 3
+
+        for attempt in range(max_attempts):
+            headers = self._base_headers()
+            headers["Authorization"] = f"Bearer {self._jwt_token}"
+            payload = {
+                "exchange": spec["exchange"],
+                "symboltoken": spec["token"],
+                "interval": angel_interval,
+                "fromdate": from_date,
+                "todate": to_date,
+            }
+
+            try:
+                async with self._candle_lock:
+                    wait = self._candle_min_interval - (time.time() - self._last_candle_ts)
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                    self._last_candle_ts = time.time()
+                    client = await self.get_http_client()
+                    resp = await client.post(
+                        "https://apiconnect.angelone.in/rest/secure/angelbroking/historical/v1/getCandleData",
+                        json=payload,
+                        headers=headers,
+                    )
+
+                if resp.status_code == 401:
+                    last_code = "HTTP_401"
+                    last_reason = "Angel One historical session expired (HTTP 401); renewing token."
+                    logger.warning("Historical candles 401 for %s; forcing token refresh", sym_norm)
+                    self._token_expiry_epoch = 0.0
+                    self._jwt_token = None
+                    if await self.authenticate(force_refresh=True) and attempt < max_attempts - 1:
+                        continue
+                    break
+
+                if resp.status_code in (429, 403):
+                    has_retry_hdr = bool(resp.headers.get("Retry-After") or resp.headers.get("retry-after"))
+                    retry_after = self._parse_retry_after(resp, default_sec=12.0 if resp.status_code == 429 else 8.0)
+                    last_code = f"HTTP_{resp.status_code}"
+                    last_reason = f"Angel One historical API rate-limited/rejected (HTTP {resp.status_code}); retry in {int(retry_after)}s."
+                    logger.warning("Historical candles HTTP %s for %s (attempt %d/%d)", resp.status_code, sym_norm, attempt + 1, max_attempts)
+                    if resp.status_code == 403 and attempt < max_attempts - 1 and not has_retry_hdr:
+                        await asyncio.sleep((1.5 * (attempt + 1)) + random.uniform(0.1, 0.3))
+                        continue
+                    if attempt < max_attempts - 1 and retry_after <= 3.0:
+                        await asyncio.sleep(retry_after + random.uniform(0.05, 0.25))
+                        continue
+                    self._candle_cooldown_until = max(self._candle_cooldown_until, time.time() + retry_after)
+                    break
+
+                if resp.status_code >= 500:
+                    last_code = f"HTTP_{resp.status_code}"
+                    last_reason = f"Angel One historical API server error (HTTP {resp.status_code})."
+                    logger.warning("Historical candles HTTP %s for %s (attempt %d/%d)", resp.status_code, sym_norm, attempt + 1, max_attempts)
+                    if attempt < max_attempts - 1:
+                        await asyncio.sleep((0.4 * (2 ** attempt)) + random.uniform(0.05, 0.25))
+                        continue
+                    break
+
+                if resp.status_code != 200:
+                    last_code = f"HTTP_{resp.status_code}"
+                    last_reason = f"Angel One historical API returned HTTP {resp.status_code}."
+                    logger.warning("Historical candles unexpected HTTP %s for %s", resp.status_code, sym_norm)
+                    break
+
+                data = resp.json()
+                if data.get("status") is not True:
+                    err_code = str(data.get("errorcode") or "").strip().upper()
+                    err_msg = str(data.get("message") or "Unknown broker error").strip()
+                    last_code = err_code or "BROKER_ERROR"
+                    last_reason = f"Angel One historical error ({last_code}): {err_msg}"
+                    logger.warning("SmartAPI historical rejected for %s: code=%s msg=%s", sym_norm, last_code, err_msg)
+
+                    if err_code in ("AG8001", "AG8002", "AG8003"):
+                        self._token_expiry_epoch = 0.0
+                        self._jwt_token = None
+                        if await self.authenticate(force_refresh=True) and attempt < max_attempts - 1:
+                            continue
+                        break
+
+                    if err_code in ("AB1004", "AB1010", "AG8004") or "rate" in err_msg.lower() or "exceed" in err_msg.lower():
+                        self._candle_cooldown_until = max(self._candle_cooldown_until, time.time() + 10.0)
+                        if attempt < max_attempts - 1:
+                            await asyncio.sleep((0.5 * (2 ** attempt)) + random.uniform(0.05, 0.25))
+                            continue
+                    break
+
+                parsed = self._parse_and_validate_candles(data.get("data"), one_day=one_day, angel_interval=angel_interval)
+                if not parsed and incremental_from is not None:
+                    # Incremental tail returned empty; fall back to full range once
+                    incremental_from = None
+                    from_date = full_from_date
+                    if attempt < max_attempts - 1:
+                        continue
+
+                if not parsed:
+                    last_code = "EMPTY_CANDLES"
+                    last_reason = f"Angel One returned empty or invalid historical candles for {sym_norm}."
+                    break
+
+                if incremental_from is not None and prev_entry:
+                    candles = self._merge_candles(prev_entry[1], parsed, one_day=one_day, angel_interval=angel_interval)
+                else:
+                    candles = parsed
+
+                is_fresh, _, last_ist, stale_note = self._assess_candle_freshness(candles, angel_interval)
+                now_ts = time.time()
+                self._last_valid_candles[cache_key] = (now_ts, candles)
+                if is_fresh:
+                    self._candle_cache[cache_key] = (now_ts, candles)
+                    return {
+                        "candles": candles,
+                        "source": "live",
+                        "last_candle_ist": last_ist,
+                        "cached_age_seconds": 0.0,
+                        "error": None,
+                        "error_code": None,
+                        "reason": None,
+                    }
+                return {
+                    "candles": candles,
+                    "source": "stale",
+                    "last_candle_ist": last_ist,
+                    "cached_age_seconds": 0.0,
+                    "error": stale_note,
+                    "error_code": "STALE_CANDLES",
+                    "reason": stale_note,
+                }
+
+            except (httpx.TimeoutException, httpx.RequestError) as exc:
+                last_code = type(exc).__name__
+                last_reason = f"Network timeout/error fetching historical candles for {sym_norm}: {type(exc).__name__}"
+                logger.warning("Historical candles network error for %s (attempt %d/%d): %s", sym_norm, attempt + 1, max_attempts, exc)
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep((0.4 * (2 ** attempt)) + random.uniform(0.05, 0.25))
+                    continue
+            except Exception as exc:
+                last_code = type(exc).__name__
+                last_reason = f"Unexpected error fetching historical candles for {sym_norm}: {exc}"
+                logger.warning("Error fetching historical candles for %s: %s", sym_norm, exc)
+                break
+
+        return _stale_or_unavailable(last_reason, error_code=last_code)
+
     async def get_candles(
         self,
         symbol: str = "NIFTY",
@@ -432,117 +883,13 @@ class AngelService:
         With `contract` set, returns that option's REAL candles (empty list if unavailable -
         never synthetic), otherwise the index candles.
         """
-        sym_norm = normalize_index_symbol(symbol)
-        spec = dict(INDEX_CONFIG.get(sym_norm, INDEX_CONFIG["NIFTY"]))
-        if contract is not None:
-            spec["exchange"] = contract.exchange
-            spec["token"] = contract.token
-
-        angel_interval = INTERVAL_MAP.get(interval.lower(), INTERVAL_MAP.get(interval, "FIVE_MINUTE"))
-        cache_key = f"{spec['exchange']}_{spec['token']}_{angel_interval}_{range_period.lower()}"
-        now = time.time()
-        ttl = 60.0 if angel_interval == "ONE_DAY" else 5.0
-
-        if cache_key in self._candle_cache:
-            c_time, c_candles = self._candle_cache[cache_key]
-            if now - c_time < ttl:
-                return [c.copy() for c in c_candles]
-
-        if await self.authenticate():
-            now_dt = datetime.now(tz=IST)
-            days = 5
-            one_day = range_period.lower() in ("1d", "today")
-            if one_day:
-                days = 5  # look back over weekends/holidays; trimmed to the last session below
-            elif range_period.lower() in ("5d",):
-                days = 5
-            elif range_period.lower() in ("10d", "15d"):
-                days = 15
-            elif range_period.lower() in ("1mo", "30d"):
-                days = 30
-            elif range_period.lower() in ("1y", "1year"):
-                days = 365
-
-            if angel_interval == "ONE_DAY" and days < 30:
-                days = 60
-
-            from_date = (now_dt - timedelta(days=days)).strftime("%Y-%m-%d 09:15")
-            to_date = min(now_dt, now_dt.replace(hour=15, minute=30)).strftime("%Y-%m-%d %H:%M")
-
-            headers = self._base_headers()
-            headers["Authorization"] = f"Bearer {self._jwt_token}"
-
-            payload = {
-                "exchange": spec["exchange"],
-                "symboltoken": spec["token"],
-                "interval": angel_interval,
-                "fromdate": from_date,
-                "todate": to_date,
-            }
-
-            try:
-                client = await self.get_http_client()
-                resp = await client.post(
-                    "https://apiconnect.angelone.in/rest/secure/angelbroking/historical/v1/getCandleData",
-                    json=payload,
-                    headers=headers,
-                )
-
-                if resp.status_code == 200:
-                    data = resp.json()
-                    raw = data.get("data") or []
-                    candles: list[dict[str, Any]] = []
-                    last_time = -1
-
-                    for row in raw:
-                        if len(row) < 5:
-                            continue
-                        ts_str, o, h, l, c = row[0], row[1], row[2], row[3], row[4]
-                        vol = row[5] if len(row) > 5 else 0
-                        try:
-                            dt = datetime.fromisoformat(ts_str)
-                            if dt.tzinfo is None:
-                                dt = dt.replace(tzinfo=IST)
-                            t = int(dt.timestamp())
-                            o_f, h_f, l_f, c_f, v_f = float(o), float(h), float(l), float(c), float(vol)
-                        except (ValueError, TypeError):
-                            continue
-
-                        if not (math.isfinite(o_f) and math.isfinite(h_f) and math.isfinite(l_f) and math.isfinite(c_f)):
-                            continue
-                        if t <= last_time:
-                            continue
-
-                        candles.append({
-                            "time": t,
-                            "open": round(o_f, 2),
-                            "high": round(max(h_f, o_f, c_f), 2),
-                            "low": round(min(l_f, o_f, c_f), 2),
-                            "close": round(c_f, 2),
-                            "volume": int(v_f),
-                        })
-                        last_time = t
-
-                    if candles and one_day and angel_interval != "ONE_DAY":
-                        last_day = datetime.fromtimestamp(candles[-1]["time"], tz=IST).date()
-                        candles = [
-                            c for c in candles
-                            if datetime.fromtimestamp(c["time"], tz=IST).date() == last_day
-                        ]
-
-                    if candles:
-                        self._candle_cache[cache_key] = (now, candles)
-                        return [c.copy() for c in candles]
-            except Exception as exc:
-                logger.warning("Error fetching historical candles for %s: %s", sym_norm, exc)
-
-        if contract is not None or self.is_configured():
-            return []
-
-        # Fallback realistic candle generation
-        fallback = self._generate_fallback_candles(sym_norm, interval=interval, count=80)
-        self._candle_cache[cache_key] = (now, fallback)
-        return fallback
+        meta = await self.get_candles_with_meta(
+            symbol=symbol,
+            interval=interval,
+            range_period=range_period,
+            contract=contract,
+        )
+        return meta.get("candles") or []
 
     def _generate_fallback_candles(
         self,
